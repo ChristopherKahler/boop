@@ -35,11 +35,13 @@ func setup(t *testing.T) *fixture {
 	ctx := context.Background()
 	ps, es := projects.New(db), events.New(db)
 	name := func(s string) *string { return &s }
-	uini, _, err := ps.Create(ctx, projects.Input{Name: name("Uini")})
+	// Every project belongs to a client; migration 0004 creates "internal".
+	internal := name("cli_internal")
+	uini, _, err := ps.Create(ctx, projects.Input{Name: name("Uini"), ClientID: internal})
 	if err != nil {
 		t.Fatal(err)
 	}
-	infra, _, _ := ps.Create(ctx, projects.Input{Name: name("Infra")})
+	infra, _, _ := ps.Create(ctx, projects.Input{Name: name("Infra"), ClientID: internal})
 	r := redact.New()
 	f := &fixture{t: t, uini: uini, infra: infra}
 	post := func(p projects.Project, in events.Input) {
@@ -112,7 +114,9 @@ func TestListProjects(t *testing.T) {
 	f := setup(t)
 	var out ListProjectsOut
 	f.call("list_projects", nil, &out)
-	if len(out.Projects) != 2 || out.Projects[0].Slug == "" || out.Projects[0].MinLevel != "info" {
+	// min_level reports the lowest level that pushes: new projects inherit
+	// the default client's warning-and-above routing.
+	if len(out.Projects) != 2 || out.Projects[0].Slug == "" || out.Projects[0].MinLevel != "warning" {
 		t.Errorf("projects = %+v", out.Projects)
 	}
 }

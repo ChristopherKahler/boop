@@ -49,7 +49,7 @@
 </script>
 
 <div class="stack">
-  <div class="crumb"><a href="/" onclick={link}>Inbox</a><span class="faint">/</span><span class="muted mono">{fingerprint}</span></div>
+  <div class="crumb"><a href="/events" onclick={link}>Events</a><span class="faint">/</span><span class="muted mono">{fingerprint}</span></div>
 
   {#if error}
     <Notice tone="bad">{error}</Notice>

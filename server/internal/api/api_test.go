@@ -14,8 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chrisgreg/boop/server/internal/alerts"
 	"github.com/chrisgreg/boop/server/internal/apns"
 	"github.com/chrisgreg/boop/server/internal/auth"
+	"github.com/chrisgreg/boop/server/internal/clients"
 	"github.com/chrisgreg/boop/server/internal/config"
 	"github.com/chrisgreg/boop/server/internal/database"
 	"github.com/chrisgreg/boop/server/internal/delivery"
@@ -68,7 +70,9 @@ func newEnv(t *testing.T) *env {
 		DB:         db,
 		Log:        log,
 		Settings:   settings.New(db),
+		Clients:    clients.New(db),
 		Projects:   projects.New(db),
+		Alerts:     alerts.New(db),
 		Devices:    dev,
 		Pairing:    pairing.New(db, dev),
 		Events:     events.New(db),
@@ -79,7 +83,13 @@ func newEnv(t *testing.T) *env {
 	}
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
-	return &env{t: t, srv: srv, server: s, sender: sender}
+	e := &env{t: t, srv: srv, server: s, sender: sender}
+	// Upstream's tests predate routing and expect every level to push, as
+	// upstream did by default; new clients only push warning and above.
+	if r := e.do("PATCH", "/api/v1/clients/internal", "", map[string]any{"push_levels": []string{"info", "success", "warning", "error", "critical"}}); r.status != 200 {
+		t.Fatalf("open up default client routing: %d %s", r.status, r.raw)
+	}
+	return e
 }
 
 type resp struct {
@@ -576,7 +586,8 @@ func TestDeliveryFanOut(t *testing.T) {
 	if dl[0].(map[string]any)["status"] != "sent" || len(e.sender.sent) != 2 {
 		t.Errorf("deliveries: %s", r.raw)
 	}
-	if e.sender.sent[0].n.Title != "Uini · Test boop" || e.sender.sent[0].n.EventID == "" || e.sender.sent[0].n.ProjectID != pid {
+	// The fork's titles name the client; the project moves to the body.
+	if n := e.sender.sent[0].n; n.Title != "Internal · Test boop" || !strings.HasPrefix(n.Body, "Uini: ") || n.EventID == "" || n.ProjectID != pid {
 		t.Errorf("notification = %+v", e.sender.sent[0].n)
 	}
 	evID := r.body["event"].(map[string]any)["id"].(string)

@@ -3,6 +3,8 @@
   import { router, link } from './lib/router.svelte'
   import Tabs from './lib/ui/Tabs.svelte'
   import StatusDot from './lib/ui/StatusDot.svelte'
+  import Alerts from './pages/Alerts.svelte'
+  import AlertDetail from './pages/AlertDetail.svelte'
   import Inbox from './pages/Inbox.svelte'
   import EventDetail from './pages/EventDetail.svelte'
   import Group from './pages/Group.svelte'
@@ -52,12 +54,15 @@
 
   const route = $derived(router.route)
   const tabs = [
-    { label: 'Inbox', href: '/' },
-    { label: 'Projects', href: '/projects' },
+    { label: 'Alerts', href: '/' },
+    { label: 'Events', href: '/events' },
+    { label: 'Clients', href: '/projects' },
     { label: 'Devices', href: '/devices' },
     { label: 'Settings', href: '/settings' },
   ]
-  const activeTab = $derived(route.name === 'event' || route.name === 'group' ? '/' : router.path)
+  const activeTab = $derived(
+    route.name === 'alert' ? '/' : route.name === 'event' || route.name === 'group' || route.name === 'inbox' ? '/events' : router.path,
+  )
 </script>
 
 <div class="page">
@@ -90,7 +95,11 @@
     <div class="tabs"><Tabs items={tabs} active={activeTab} /></div>
     {#key router.path}
       <div in:pageIn>
-        {#if route.name === 'inbox'}
+        {#if route.name === 'alerts'}
+          <Alerts />
+        {:else if route.name === 'alert'}
+          <AlertDetail id={route.params.id} />
+        {:else if route.name === 'inbox'}
           <Inbox />
         {:else if route.name === 'event'}
           <EventDetail id={route.params.id} />
@@ -103,7 +112,7 @@
         {:else if route.name === 'settings'}
           <Settings />
         {:else}
-          <p class="muted">Nothing here. <a href="/" onclick={link}>Back to the inbox</a>.</p>
+          <p class="muted">Nothing here. <a href="/" onclick={link}>Back to alerts</a>.</p>
         {/if}
       </div>
     {/key}

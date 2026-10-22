@@ -3,15 +3,69 @@
 export type Level = 'info' | 'success' | 'warning' | 'error' | 'critical'
 export const LEVELS: Level[] = ['info', 'success', 'warning', 'error', 'critical']
 
+export interface Client {
+  id: string
+  name: string
+  slug: string
+  /** Levels that push to the phone; the rest only land in the inbox. */
+  push_levels: Level[]
+  /** Push a "resolved" notification when an alert that pushed recovers. */
+  push_recoveries: boolean
+  project_count: number
+  created_at: string
+  updated_at: string
+}
+
 export interface Project {
   id: string
   name: string
   slug: string
   icon: string
   notify: boolean
-  min_level: Level
+  min_level: Level | ''
+  client_id: string
+  client_name: string
+  client_slug: string
+  /** null = use the client's routing. */
+  push_levels: Level[] | null
+  effective_push_levels: Level[]
   created_at: string
   updated_at: string
+}
+
+export type AlertStatus = 'open' | 'acknowledged' | 'resolved'
+
+/** One problem: the occurrences sharing a fingerprint until it resolves. */
+export interface Alert {
+  id: string
+  project_id: string
+  project_name: string
+  project_slug: string
+  project_icon: string
+  client_id: string
+  client_name: string
+  fingerprint: string
+  source: string
+  title: string
+  level: Level
+  status: AlertStatus
+  count: number
+  first_seen: string
+  last_seen: string
+  last_event_id?: string
+  notified_at: string | null
+  acknowledged_at: string | null
+  acknowledged_by?: string
+  resolved_at: string | null
+  resolved_by?: string
+  resolve_event_id?: string
+}
+
+export interface AlertPage {
+  alerts: Alert[]
+  next_cursor?: string
+  open: number
+  acknowledged: number
 }
 
 export interface ProjectCreated extends Project {
@@ -38,6 +92,8 @@ export interface Event {
   project_name: string
   project_slug: string
   project_icon: string
+  client_id: string
+  client_name: string
   source: string
   type: string
   level: Level
@@ -51,6 +107,10 @@ export interface Event {
   silence_id?: string
   actions?: EventAction[]
   group?: GroupInfo
+  /** The alert this event opened, repeated or resolved. */
+  alert_id?: string
+  /** Why it did or did not push. */
+  route?: string
 }
 
 export type SilenceField = 'fingerprint' | 'title' | 'source'
@@ -182,7 +242,7 @@ export const api = {
   settings: () => request<Settings>('GET', '/api/v1/settings'),
   updateSettings: (patch: Partial<Settings>) => request<Settings>('PATCH', '/api/v1/settings', patch),
 
-  events: (params: { project?: string; level?: string; source?: string; fingerprint?: string; before?: string; limit?: number; silenced?: string; grouped?: boolean } = {}) => {
+  events: (params: { project?: string; client?: string; alert?: string; level?: string; source?: string; fingerprint?: string; before?: string; limit?: number; silenced?: string; grouped?: boolean } = {}) => {
     const q = new URLSearchParams()
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '' && v !== false) q.set(k, String(v))
     const qs = q.toString()
@@ -191,9 +251,25 @@ export const api = {
   event: (id: string) => request<Event>('GET', `/api/v1/events/${encodeURIComponent(id)}`),
   eventDeliveries: (id: string) => request<{ deliveries: Delivery[] }>('GET', `/api/v1/events/${encodeURIComponent(id)}/deliveries`),
 
+  alerts: (params: { status?: string; client?: string; project?: string; level?: string; before?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') q.set(k, String(v))
+    const qs = q.toString()
+    return request<AlertPage>('GET', '/api/v1/alerts' + (qs ? '?' + qs : ''))
+  },
+  alert: (id: string) => request<Alert>('GET', `/api/v1/alerts/${encodeURIComponent(id)}`),
+  acknowledge: (id: string) => request<Alert>('POST', `/api/v1/alerts/${encodeURIComponent(id)}/acknowledge${byQuery()}`),
+  resolve: (id: string) => request<Alert>('POST', `/api/v1/alerts/${encodeURIComponent(id)}/resolve${byQuery()}`),
+  reopen: (id: string) => request<Alert>('POST', `/api/v1/alerts/${encodeURIComponent(id)}/reopen`),
+
+  clients: () => request<{ clients: Client[] }>('GET', '/api/v1/clients'),
+  createClient: (input: { name: string; push_levels?: Level[]; push_recoveries?: boolean }) => request<Client>('POST', '/api/v1/clients', input),
+  updateClient: (id: string, patch: Partial<Pick<Client, 'name' | 'push_levels' | 'push_recoveries'>>) => request<Client>('PATCH', `/api/v1/clients/${id}`, patch),
+  deleteClient: (id: string) => request<void>('DELETE', `/api/v1/clients/${id}`),
+
   projects: () => request<{ projects: Project[] }>('GET', '/api/v1/projects'),
-  createProject: (input: { name: string; icon?: string }) => request<ProjectCreated>('POST', '/api/v1/projects', input),
-  updateProject: (id: string, patch: Partial<Pick<Project, 'name' | 'icon' | 'notify' | 'min_level'>>) =>
+  createProject: (input: { name: string; icon?: string; client_id?: string }) => request<ProjectCreated>('POST', '/api/v1/projects', input),
+  updateProject: (id: string, patch: Partial<Pick<Project, 'name' | 'icon' | 'notify' | 'client_id' | 'push_levels'>>) =>
     request<Project>('PATCH', `/api/v1/projects/${id}`, patch),
   deleteProject: (id: string) => request<void>('DELETE', `/api/v1/projects/${id}`),
   rotateKey: (id: string) => request<ProjectCreated>('POST', `/api/v1/projects/${id}/rotate-key`),
@@ -212,6 +288,15 @@ export const api = {
   createSilence: (input: { field: SilenceField; value: string; project_id?: string; note?: string }) => request<Silence>('POST', '/api/v1/silences', input),
   deleteSilence: (id: string) => request<void>('DELETE', `/api/v1/silences/${id}`),
 
-  test: (project_id?: string) =>
-    request<{ event: Event; deliveries: Delivery[]; apns_configured: boolean }>('POST', '/api/v1/test', project_id ? { project_id } : {}),
+  test: (project_id?: string, force = true) =>
+    request<{ event: Event; deliveries: Delivery[]; apns_configured: boolean; route: string }>('POST', '/api/v1/test', { ...(project_id ? { project_id } : {}), force }),
+}
+
+/** Tells the server an alert was acted on from the installed phone app. */
+function byQuery(): string {
+  try {
+    return window.matchMedia?.('(display-mode: standalone)').matches ? '?by=phone' : ''
+  } catch {
+    return ''
+  }
 }
