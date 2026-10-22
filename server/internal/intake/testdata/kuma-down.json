@@ -1,0 +1,1 @@
+{"heartbeat":{"monitorID":12,"status":0,"time":"2026-10-22 21:30:00.000","msg":"connect ECONNREFUSED 203.0.113.10:443","ping":null,"important":true,"duration":0,"retries":3},"monitor":{"id":12,"name":"Dealer website","url":"https://acme-motors.example.com","hostname":null,"type":"http","interval":60},"msg":"[Dealer website] [🔴 Down] connect ECONNREFUSED 203.0.113.10:443"}

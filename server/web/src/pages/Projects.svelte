@@ -14,6 +14,7 @@
   import ProjectIcon from '../lib/ui/ProjectIcon.svelte'
   import IconPicker from '../lib/ui/IconPicker.svelte'
   import LevelPicker from '../lib/ui/LevelPicker.svelte'
+  import IntakesPanel from '../lib/ui/IntakesPanel.svelte'
   import { panel, soft, pop } from '../lib/motion'
   import Skeleton from '../lib/ui/Skeleton.svelte'
 
@@ -242,7 +243,12 @@
                       <LevelPicker value={p.push_levels} onchange={(v) => patchProject(p, { push_levels: v })} />
                     </SettingRow>
                   {/if}
-                  <SettingRow label="API key" hint="Rotating immediately invalidates the current key.">
+                  <div class="intake-block">
+                    <div class="setting">Intakes</div>
+                    <p class="muted caption">Addresses that Sentry, Healthchecks, Uptime Kuma, GitHub, Nightwatch or any other service post to. Problems open alerts; recoveries resolve them.</p>
+                    <IntakesPanel projectId={p.id} />
+                  </div>
+                  <SettingRow label="API key" hint="For sending events from your own code (POST /api/v1/events). Rotating invalidates the current key.">
                     <Button variant="secondary" size="sm" onclick={() => rotate(p)}>Rotate key</Button>
                   </SettingRow>
                   <SettingRow label="Delete project" hint="Removes the project, its alerts and every event it received.">
@@ -280,6 +286,7 @@
   .pmeta { margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .edit { margin-top: var(--up-space-4); }
   .plist { margin-top: var(--up-space-4); padding-top: var(--up-space-3); border-top: 1px solid var(--up-border-hairline); display: flex; flex-direction: column; gap: var(--up-space-3); }
+  .intake-block { display: flex; flex-direction: column; gap: 6px; padding: 14px 0; border-top: 1px solid var(--up-border-hairline); }
   .project + .project { padding-top: var(--up-space-3); border-top: 1px solid var(--up-border-hairline); }
   @media (max-width: 720px) {
     .two { grid-template-columns: 1fr; }

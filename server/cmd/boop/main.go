@@ -24,6 +24,7 @@ import (
 	"github.com/chrisgreg/boop/server/internal/delivery"
 	"github.com/chrisgreg/boop/server/internal/devices"
 	"github.com/chrisgreg/boop/server/internal/events"
+	"github.com/chrisgreg/boop/server/internal/intake"
 	"github.com/chrisgreg/boop/server/internal/pairing"
 	"github.com/chrisgreg/boop/server/internal/projects"
 	"github.com/chrisgreg/boop/server/internal/settings"
@@ -118,7 +119,7 @@ func run() error {
 	evStore := events.New(db)
 	srv := &api.Server{
 		Config: cfg, DB: db, Log: log, Settings: st,
-		Clients: clients.New(db), Projects: projects.New(db), Alerts: alerts.New(db), Devices: devStore, Pairing: pairing.New(db, devStore), Events: evStore, Silences: silences.New(db),
+		Clients: clients.New(db), Projects: projects.New(db), Alerts: alerts.New(db), Intakes: intake.New(db), Devices: devStore, Pairing: pairing.New(db, devStore), Events: evStore, Silences: silences.New(db),
 		Dispatcher: dispatcher, APNS: client, APNSError: apnsErr, WebPush: web, WebPushError: webErr, ActionSecret: secret,
 		Admin: admin, StartedAt: time.Now(), Web: webui.Handler(),
 	}
