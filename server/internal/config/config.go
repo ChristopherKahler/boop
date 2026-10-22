@@ -18,6 +18,8 @@ type Config struct {
 	// value then overrides whatever was saved from the web UI on every start.
 	RetentionDaysSet bool
 	LogLevel         string
+	// AppName is what the installed phone app is called on the home screen.
+	AppName string
 
 	// Optional admin login for the web UI and admin API. Both must be set to enable it.
 	AdminUser     string
@@ -28,6 +30,20 @@ type Config struct {
 	MCPToken string
 
 	APNS APNS
+
+	// WebPush is the VAPID identity for pushes to the installed web app. When
+	// the keys are empty the server generates a pair on first start and keeps
+	// it in its database, so push works with no setup.
+	WebPush WebPush
+}
+
+// WebPush holds VAPID settings (RFC 8292).
+type WebPush struct {
+	PublicKey  string
+	PrivateKey string
+	// Subject is the contact push services see: mailto:you@example.com or an
+	// https URL. Defaults to BOOP_BASE_URL.
+	Subject string
 }
 
 // APNS holds Apple Push Notification service credentials.
@@ -71,6 +87,7 @@ func Load() (Config, error) {
 		DatabasePath:  env("BOOP_DATABASE_PATH", "/data/boop.db"),
 		RetentionDays: 90,
 		LogLevel:      env("BOOP_LOG_LEVEL", "info"),
+		AppName:       strings.TrimSpace(env("BOOP_APP_NAME", "Boop")),
 		AdminUser:     env("BOOP_ADMIN_USER", ""),
 		AdminPassword: env("BOOP_ADMIN_PASSWORD", ""),
 		MCPToken:      strings.TrimSpace(env("BOOP_MCP_TOKEN", "")),
@@ -81,6 +98,11 @@ func Load() (Config, error) {
 			PrivateKeyPath: env("APNS_PRIVATE_KEY_PATH", ""),
 			PrivateKey:     env("APNS_PRIVATE_KEY", ""),
 			Environment:    env("APNS_ENVIRONMENT", "production"),
+		},
+		WebPush: WebPush{
+			PublicKey:  strings.TrimSpace(env("BOOP_VAPID_PUBLIC_KEY", "")),
+			PrivateKey: strings.TrimSpace(env("BOOP_VAPID_PRIVATE_KEY", "")),
+			Subject:    strings.TrimSpace(env("BOOP_VAPID_SUBJECT", "")),
 		},
 	}
 	if v := os.Getenv("BOOP_PORT"); v != "" {
@@ -107,6 +129,12 @@ func Load() (Config, error) {
 	}
 	if c.MCPToken != "" && len(c.MCPToken) < 16 {
 		return c, fmt.Errorf("BOOP_MCP_TOKEN must be at least 16 characters")
+	}
+	if (c.WebPush.PublicKey == "") != (c.WebPush.PrivateKey == "") {
+		return c, fmt.Errorf("BOOP_VAPID_PUBLIC_KEY and BOOP_VAPID_PRIVATE_KEY must be set together (generate a pair with: boop vapid)")
+	}
+	if sub := c.WebPush.Subject; sub != "" && !strings.HasPrefix(sub, "mailto:") && !strings.HasPrefix(sub, "https://") {
+		return c, fmt.Errorf("BOOP_VAPID_SUBJECT must be a mailto: address or an https:// URL, got %q", sub)
 	}
 	if c.APNS.Environment != "production" && c.APNS.Environment != "sandbox" {
 		return c, fmt.Errorf("APNS_ENVIRONMENT must be production or sandbox, got %q", c.APNS.Environment)

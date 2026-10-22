@@ -26,9 +26,11 @@ type Device struct {
 	HasToken    bool    `json:"push_registered"`
 	Platform    string  `json:"platform"`
 	AppBundleID string  `json:"app_bundle_id"`
-	LastSeenAt  *string `json:"last_seen_at"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	// PushKeys holds a web push subscription's keys (platform "web").
+	PushKeys   string  `json:"-"`
+	LastSeenAt *string `json:"last_seen_at"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
 }
 
 // Registration is the body of POST /devices and PATCH /devices/:id.
@@ -47,11 +49,11 @@ type Store struct {
 // New returns a Store.
 func New(db *sql.DB) *Store { return &Store{db: db} }
 
-const cols = `id, name, device_token, platform, app_bundle_id, last_seen_at, created_at, updated_at`
+const cols = `id, name, device_token, platform, app_bundle_id, push_keys, last_seen_at, created_at, updated_at`
 
 func scan(row interface{ Scan(...any) error }) (Device, error) {
 	var d Device
-	err := row.Scan(&d.ID, &d.Name, &d.DeviceToken, &d.Platform, &d.AppBundleID, &d.LastSeenAt, &d.CreatedAt, &d.UpdatedAt)
+	err := row.Scan(&d.ID, &d.Name, &d.DeviceToken, &d.Platform, &d.AppBundleID, &d.PushKeys, &d.LastSeenAt, &d.CreatedAt, &d.UpdatedAt)
 	d.HasToken = d.DeviceToken != nil && *d.DeviceToken != ""
 	return d, err
 }
@@ -136,6 +138,50 @@ func (s *Store) Register(ctx context.Context, id string, in Registration) (Devic
 	_, err = s.db.ExecContext(ctx, `UPDATE devices SET name=?, device_token=?, platform=?, app_bundle_id=?, updated_at=? WHERE id=?`,
 		d.Name, d.DeviceToken, d.Platform, d.AppBundleID, d.UpdatedAt, d.ID)
 	return d, err
+}
+
+// PlatformWeb marks a device that receives Web Push (the installed web app).
+const PlatformWeb = "web"
+
+// SaveWebSubscription stores a browser push subscription as a device. The
+// same endpoint subscribing again (a refreshed subscription, a renamed
+// device) updates the existing row instead of adding another.
+func (s *Store) SaveWebSubscription(ctx context.Context, name, endpoint, keysJSON string) (Device, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "Web app"
+	}
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	now := ids.Now()
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM devices WHERE device_token = ?`, endpoint).Scan(&id)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		id = ids.New("dev")
+		_, err = s.db.ExecContext(ctx, `INSERT INTO devices (id, name, device_token, platform, push_keys, credential_hash, last_seen_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			id, name, endpoint, PlatformWeb, keysJSON, auth.Hash(auth.NewSecret(auth.PrefixDevice)), now, now, now)
+	case err == nil:
+		_, err = s.db.ExecContext(ctx, `UPDATE devices SET name = ?, platform = ?, push_keys = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`,
+			name, PlatformWeb, keysJSON, now, now, id)
+	}
+	if err != nil {
+		return Device{}, err
+	}
+	return s.Get(ctx, id)
+}
+
+// DeleteByToken removes the device holding a push token or web endpoint.
+func (s *Store) DeleteByToken(ctx context.Context, token string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM devices WHERE device_token = ?`, token)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ClearToken removes a device's APNs token (e.g. after APNs reports it unregistered).

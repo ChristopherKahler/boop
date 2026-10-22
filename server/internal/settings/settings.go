@@ -17,6 +17,10 @@ const (
 	KeySetupCompleted = "setup_completed"
 	KeyRedactKeys     = "redact_keys" // comma-separated, added to the built-in list
 	KeyMCPEnabled     = "mcp_enabled" // "false" turns the /mcp endpoint off; unset = on
+	// Generated on first start and never shown by the settings API.
+	KeyVAPIDPublic  = "vapid_public_key"
+	KeyVAPIDPrivate = "vapid_private_key"
+	KeyActionSecret = "action_secret" // signs Acknowledge tokens in pushes
 )
 
 // Store reads and writes settings.

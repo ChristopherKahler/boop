@@ -28,10 +28,18 @@ import (
 	"github.com/chrisgreg/boop/server/internal/projects"
 	"github.com/chrisgreg/boop/server/internal/settings"
 	"github.com/chrisgreg/boop/server/internal/silences"
-	"github.com/chrisgreg/boop/server/internal/web"
+	webui "github.com/chrisgreg/boop/server/internal/web"
+	"github.com/chrisgreg/boop/server/internal/webpush"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "vapid" {
+		if err := printVAPID(); err != nil {
+			fmt.Fprintln(os.Stderr, "boop:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "boop:", err)
 		os.Exit(1)
@@ -82,6 +90,22 @@ func run() error {
 		log.Warn("apns.not_configured", "missing", cfg.APNS.Missing())
 	}
 	dispatcher := delivery.New(db, devStore, sender, log)
+	secret, err := actionSecret(ctx, st)
+	if err != nil {
+		return err
+	}
+	var web *webpush.Client
+	webErr := ""
+	if keys, source, err := webPushKeys(ctx, cfg, st); err != nil {
+		webErr = err.Error()
+		log.Warn("webpush.invalid", "error", webErr)
+	} else {
+		web = webpush.NewClient(keys, webPushSubject(cfg))
+		dispatcher.SetWeb(web, func(alertID string) string {
+			return auth.SignAction(secret, alertID, "acknowledge", time.Now().Add(7*24*time.Hour))
+		})
+		log.Info("webpush.configured", "keys", source, "subject", webPushSubject(cfg))
+	}
 	dispatcher.Start(ctx)
 
 	admin := auth.NewAdmin(cfg.AdminUser, cfg.AdminPassword)
@@ -95,7 +119,8 @@ func run() error {
 	srv := &api.Server{
 		Config: cfg, DB: db, Log: log, Settings: st,
 		Clients: clients.New(db), Projects: projects.New(db), Alerts: alerts.New(db), Devices: devStore, Pairing: pairing.New(db, devStore), Events: evStore, Silences: silences.New(db),
-		Dispatcher: dispatcher, APNS: client, APNSError: apnsErr, Admin: admin, StartedAt: time.Now(), Web: web.Handler(),
+		Dispatcher: dispatcher, APNS: client, APNSError: apnsErr, WebPush: web, WebPushError: webErr, ActionSecret: secret,
+		Admin: admin, StartedAt: time.Now(), Web: webui.Handler(),
 	}
 
 	go retentionLoop(ctx, log, st, evStore, srv.Pairing, cfg.RetentionDays)

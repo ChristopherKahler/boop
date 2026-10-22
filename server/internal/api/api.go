@@ -29,6 +29,7 @@ import (
 	"github.com/chrisgreg/boop/server/internal/routing"
 	"github.com/chrisgreg/boop/server/internal/settings"
 	"github.com/chrisgreg/boop/server/internal/silences"
+	"github.com/chrisgreg/boop/server/internal/webpush"
 )
 
 // Version is the server version, overridden at build time via -ldflags.
@@ -50,15 +51,21 @@ type Server struct {
 	Dispatcher *delivery.Dispatcher
 	APNS       *apns.Client // nil when not configured
 	APNSError  string       // why APNS is nil
-	Admin      *auth.Admin  // web UI / admin API login; open when not enabled
-	StartedAt  time.Time
-	Web        http.Handler
+	// WebPush sends to the installed web app; nil when its keys are invalid.
+	WebPush      *webpush.Client
+	WebPushError string
+	// ActionSecret signs the Acknowledge tokens carried in pushes.
+	ActionSecret []byte
+	Admin        *auth.Admin // web UI / admin API login; open when not enabled
+	StartedAt    time.Time
+	Web          http.Handler
 }
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
+	mux.HandleFunc("GET /manifest.webmanifest", s.manifest)
 
 	// Admin session.
 	mux.HandleFunc("GET /api/v1/auth/me", s.authMe)
@@ -97,6 +104,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/alerts/{id}/acknowledge", s.readerAuth(s.acknowledgeAlert))
 	mux.Handle("POST /api/v1/alerts/{id}/resolve", s.readerAuth(s.resolveAlert))
 	mux.Handle("POST /api/v1/alerts/{id}/reopen", s.readerAuth(s.reopenAlert))
+
+	// Web Push: the installed web app subscribes here, and a notification's
+	// Acknowledge button posts its signed token to push/action (no login).
+	mux.Handle("GET /api/v1/webpush", s.adminAuth(s.webPushInfo))
+	mux.Handle("POST /api/v1/webpush/subscriptions", s.adminAuth(s.webPushSubscribe))
+	mux.Handle("DELETE /api/v1/webpush/subscriptions", s.adminAuth(s.webPushUnsubscribe))
+	mux.HandleFunc("POST /api/v1/push/action", s.pushAction)
 
 	// Clients: the level above projects, carrying the default routing.
 	mux.Handle("GET /api/v1/clients", s.adminAuth(s.listClients))
@@ -411,13 +425,16 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 type statusResponse struct {
-	Version        string             `json:"version"`
-	Server         string             `json:"server"`
-	Database       string             `json:"database"`
-	DatabasePath   string             `json:"database_path"`
-	BaseURL        string             `json:"base_url"`
-	UptimeSeconds  int64              `json:"uptime_seconds"`
-	APNS           apnsStatus         `json:"apns"`
+	Version       string        `json:"version"`
+	Server        string        `json:"server"`
+	Database      string        `json:"database"`
+	DatabasePath  string        `json:"database_path"`
+	BaseURL       string        `json:"base_url"`
+	UptimeSeconds int64         `json:"uptime_seconds"`
+	APNS          apnsStatus    `json:"apns"`
+	WebPush       webPushStatus `json:"webpush"`
+	// PushReady is true when any push channel (web push or APNs) can send.
+	PushReady      bool               `json:"push_ready"`
 	Devices        int                `json:"devices"`
 	PushableDevice int                `json:"pushable_devices"`
 	Projects       int                `json:"projects"`
@@ -446,6 +463,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.APNS = apnsStatus{Configured: s.APNS != nil, Error: s.APNSError, Missing: s.Config.APNS.Missing(),
 		TeamID: s.Config.APNS.TeamID, KeyID: s.Config.APNS.KeyID, BundleID: s.Config.APNS.BundleID, Environment: s.Config.APNS.Environment}
+	resp.WebPush = s.webPushStatus()
+	resp.PushReady = resp.WebPush.Configured || resp.APNS.Configured
 	devs, err := s.Devices.List(ctx)
 	if err != nil {
 		s.fail(w, err)

@@ -19,11 +19,17 @@ import (
 	"github.com/chrisgreg/boop/server/internal/ids"
 	"github.com/chrisgreg/boop/server/internal/projects"
 	"github.com/chrisgreg/boop/server/internal/routing"
+	"github.com/chrisgreg/boop/server/internal/webpush"
 )
 
 // Sender is the subset of *apns.Client the dispatcher needs.
 type Sender interface {
 	Send(ctx context.Context, deviceToken string, n apns.Notification) (string, error)
+}
+
+// WebSender is the subset of *webpush.Client the dispatcher needs.
+type WebSender interface {
+	Send(ctx context.Context, sub webpush.Subscription, payload []byte, o webpush.Options) (string, error)
 }
 
 // Statuses recorded in deliveries.status.
@@ -99,6 +105,8 @@ type Dispatcher struct {
 	devices *devices.Store
 	alerts  *alerts.Store
 	sender  Sender // nil when APNs is not configured
+	web     WebSender
+	sign    func(alertID string) string // ack token for an alert
 	log     *slog.Logger
 	timeout time.Duration
 
@@ -110,6 +118,12 @@ type Dispatcher struct {
 // recorded as skipped.
 func New(db *sql.DB, d *devices.Store, sender Sender, log *slog.Logger) *Dispatcher {
 	return &Dispatcher{db: db, devices: d, alerts: alerts.New(db), sender: sender, log: log, timeout: 10 * time.Second, queue: make(chan Message, 1024)}
+}
+
+// SetWeb turns on Web Push delivery to installed web apps. sign returns a
+// token that acknowledges the given alert from the notification.
+func (d *Dispatcher) SetWeb(w WebSender, sign func(alertID string) string) {
+	d.web, d.sign = w, sign
 }
 
 // Start runs the background worker until ctx is cancelled.
@@ -165,7 +179,10 @@ func (d *Dispatcher) Deliver(ctx context.Context, m Message) []Delivery {
 	sent := false
 	for _, dev := range devs {
 		rec := Delivery{ID: ids.New("dlv"), EventID: e.ID, DeviceID: dev.ID, DeviceName: dev.Name, AttemptedAt: ids.Now()}
-		if d.sender == nil {
+		if dev.Platform == devices.PlatformWeb {
+			d.sendWeb(ctx, dev, m, &rec)
+			sent = sent || rec.Status == StatusSent
+		} else if d.sender == nil {
 			rec.Status = StatusSkipped
 			rec.Error = "APNs is not configured"
 		} else {

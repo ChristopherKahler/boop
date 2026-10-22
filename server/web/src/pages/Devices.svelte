@@ -10,6 +10,7 @@
   import CodeBlock from '../lib/ui/CodeBlock.svelte'
   import { panel, soft, pop, reorder } from '../lib/motion'
   import Skeleton from '../lib/ui/Skeleton.svelte'
+  import ThisDevice from '../lib/ui/ThisDevice.svelte'
 
   let { embedded = false, onpaired }: { embedded?: boolean; onpaired?: () => void } = $props()
 
@@ -81,7 +82,9 @@
 <div class="stack">
   {#if error}<div transition:panel><Notice tone="bad">{error}</Notice></div>{/if}
 
-  <Card title="Pair iPhone">
+  <ThisDevice onchange={load} />
+
+  <Card title="Native iOS app (optional)">
     {#snippet action()}
       {#if pairing}
         <Button variant="secondary" size="sm" onclick={cancelPairing}>Cancel</Button>
@@ -104,16 +107,16 @@
         <div style="margin-top: 16px" transition:panel><CodeBlock code={qrJSON} wrap /></div>
       {/if}
     {:else}
-      <p class="secondary lead" in:soft>Generates a one-time QR code that the Boop iOS app scans to connect to this server. Nothing to type.</p>
+      <p class="secondary lead" in:soft>Only for the Boop iOS app built in Xcode. Phones using the installed web app need nothing here: turn on notifications above.</p>
     {/if}
   </Card>
 
   {#if !embedded}
-    <Card title="Paired devices" flush>
+    <Card title="Devices" flush>
       {#if !loaded}
         <Skeleton rows={2} />
       {:else if devices.length === 0}
-        <Empty title="No devices paired">Pair an iPhone above to start receiving pushes.</Empty>
+        <Empty title="No devices yet">Turn on notifications on your phone (open this page there) to start receiving pushes.</Empty>
       {:else}
         <div class="thead caption faint">
           <div>Name</div><div>Push</div><div class="r">Last seen</div><div></div>
@@ -128,7 +131,7 @@
               {#if d.push_registered}
                 <StatusDot tone="ok">Registered</StatusDot>
               {:else}
-                <StatusDot tone="warn">No token</StatusDot>
+                <StatusDot tone="warn">{d.platform === 'web' ? 'Subscription ended' : 'No token'}</StatusDot>
               {/if}
             </div>
             <div class="r muted">{d.last_seen_at ? relative(d.last_seen_at, now) : 'Never'}</div>
