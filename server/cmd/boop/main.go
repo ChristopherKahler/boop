@@ -110,10 +110,10 @@ func run() error {
 	dispatcher.Start(ctx)
 
 	admin := auth.NewAdmin(cfg.AdminUser, cfg.AdminPassword)
-	if admin.Enabled() {
-		log.Info("auth.enabled", "user", cfg.AdminUser)
-	} else {
-		log.Warn("auth.disabled", "hint", "set BOOP_ADMIN_USER and BOOP_ADMIN_PASSWORD to protect the web UI")
+	sessions := auth.NewDBSessions(db)
+	admin.UseSessions(sessions)
+	if err := setupLogin(ctx, log, cfg, st, admin); err != nil {
+		return err
 	}
 
 	evStore := events.New(db)
@@ -124,7 +124,7 @@ func run() error {
 		Admin: admin, StartedAt: time.Now(), Web: webui.Handler(),
 	}
 
-	go retentionLoop(ctx, log, st, evStore, srv.Pairing, cfg.RetentionDays)
+	go retentionLoop(ctx, log, st, evStore, srv.Pairing, sessions, cfg.RetentionDays)
 
 	httpServer := &http.Server{
 		Addr:              net.JoinHostPort("", strconv.Itoa(cfg.Port)),
@@ -155,7 +155,7 @@ func run() error {
 }
 
 // retentionLoop prunes old events once at start and then hourly.
-func retentionLoop(ctx context.Context, log *slog.Logger, st *settings.Store, ev *events.Store, pr *pairing.Store, def int) {
+func retentionLoop(ctx context.Context, log *slog.Logger, st *settings.Store, ev *events.Store, pr *pairing.Store, sessions *auth.DBSessions, def int) {
 	run := func() {
 		days, err := st.GetInt(ctx, settings.KeyRetentionDays, def)
 		if err != nil {
@@ -168,6 +168,7 @@ func retentionLoop(ctx context.Context, log *slog.Logger, st *settings.Store, ev
 			return
 		}
 		_ = pr.Cleanup(ctx)
+		_ = sessions.Prune(time.Now())
 		if n > 0 {
 			log.Info("retention.completed", "deleted", n, "retention_days", days)
 		}
@@ -183,6 +184,36 @@ func retentionLoop(ctx context.Context, log *slog.Logger, st *settings.Store, ev
 			run()
 		}
 	}
+}
+
+// setupLogin picks where the login comes from: BOOP_ADMIN_USER/PASSWORD, a
+// login created earlier in the setup screen, or (on a fresh install) a
+// one-time setup code printed here that the first visitor must enter.
+func setupLogin(ctx context.Context, log *slog.Logger, cfg config.Config, st *settings.Store, admin *auth.Admin) error {
+	if admin.Enabled() {
+		log.Info("auth.enabled", "user", cfg.AdminUser, "source", "environment")
+		return nil
+	}
+	user, err := st.Get(ctx, settings.KeyAdminUser, "")
+	if err != nil {
+		return err
+	}
+	hash, err := st.Get(ctx, settings.KeyAdminPasswordHash, "")
+	if err != nil {
+		return err
+	}
+	switch {
+	case user != "" && hash != "":
+		admin.UseStoredLogin(user, hash)
+		log.Info("auth.enabled", "user", user, "source", "setup")
+	case cfg.AllowNoLogin:
+		log.Warn("auth.disabled", "hint", "BOOP_ALLOW_NO_LOGIN=true: anyone who can reach this server can use it")
+	default:
+		code := auth.NewSetupCode()
+		admin.RequireSetup(code)
+		log.Warn("auth.setup_required", "setup_code", code, "hint", "open the hub in a browser and enter this code to create your login")
+	}
+	return nil
 }
 
 func newLogger(level string) *slog.Logger {

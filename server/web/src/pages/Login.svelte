@@ -19,7 +19,7 @@
       await api.login(username, password)
       onsuccess()
     } catch (e: any) {
-      error = e.status === 401 ? 'Wrong username or password.' : e.message
+      error = e.status === 401 ? 'Wrong user name or password.' : e.message
       password = ''
     } finally {
       busy = false
@@ -29,7 +29,7 @@
 
 <div class="login">
   <Card title="Sign in">
-    <p class="secondary lead">This Boop server is protected. Use the username and password from its environment.</p>
+    <p class="secondary lead">Sign in with the hub's user name and password.</p>
     <form
       onsubmit={(e) => {
         e.preventDefault()

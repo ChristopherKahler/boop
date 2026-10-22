@@ -14,6 +14,7 @@
   import Settings from './pages/Settings.svelte'
   import Setup from './pages/Setup.svelte'
   import Login from './pages/Login.svelte'
+  import CreateLogin from './pages/CreateLogin.svelte'
   import { pageIn } from './lib/motion'
 
   let setupCompleted = $state<boolean | null>(null)
@@ -21,12 +22,14 @@
   let unreachable = $state(false)
   let authRequired = $state(false)
   let needsLogin = $state(false)
+  let needsSetup = $state(false)
   setLoginHandler(() => (needsLogin = true))
 
   async function boot() {
     try {
       const me = await api.me()
       authRequired = me.auth_required
+      needsSetup = !!me.needs_setup
       if (me.auth_required && !me.authenticated) {
         needsLogin = true
         unreachable = false
@@ -88,7 +91,9 @@
     </div>
   </header>
 
-  {#if needsLogin}
+  {#if needsLogin && needsSetup}
+    <CreateLogin onsuccess={boot} />
+  {:else if needsLogin}
     <Login onsuccess={boot} />
   {:else if route.name === 'setup'}
     <Setup onfinished={() => (setupCompleted = true)} />
