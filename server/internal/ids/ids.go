@@ -4,6 +4,7 @@ package ids
 import (
 	"crypto/rand"
 	"encoding/base32"
+	"sync"
 	"time"
 )
 
@@ -27,8 +28,25 @@ func Random(n int) string {
 // lexical ordering equal to chronological ordering, which cursor pagination relies on.
 const TimeLayout = "2006-01-02T15:04:05.000000000Z"
 
-// Now returns the current UTC time formatted with TimeLayout.
-func Now() string { return Format(time.Now()) }
+var (
+	nowMu   sync.Mutex
+	nowLast time.Time
+)
+
+// Now returns the current UTC time formatted with TimeLayout. Successive calls
+// are strictly increasing: on clocks that tick coarsely (Windows) the value is
+// nudged forward a nanosecond past the previous one, so newest-first ordering
+// and cursors never tie on created_at.
+func Now() string {
+	nowMu.Lock()
+	defer nowMu.Unlock()
+	t := time.Now().UTC()
+	if !t.After(nowLast) {
+		t = nowLast.Add(time.Nanosecond)
+	}
+	nowLast = t
+	return Format(t)
+}
 
 // Format formats t in UTC with TimeLayout.
 func Format(t time.Time) string { return t.UTC().Format(TimeLayout) }
