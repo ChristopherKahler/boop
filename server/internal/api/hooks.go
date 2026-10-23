@@ -5,9 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/chrisgreg/boop/server/internal/auth"
 	"github.com/chrisgreg/boop/server/internal/intake"
 )
 
@@ -19,11 +23,29 @@ const hookMaxBody = 2 << 20
 // the only path meant to be reachable from the internet (the rest of the hub
 // can stay private); the token in the address is the credential.
 func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
+	// The sender limit comes first, so a flood of guessed addresses never
+	// reaches the database.
+	sender := auth.ClientIP(r)
+	if res := s.HookSenders.Allow(sender); !res.OK {
+		if res.First {
+			s.Log.Warn("hook.rate_limited", "sender", sender, "per_minute", s.HookSenders.PerMinute())
+		}
+		tooFast(w, res.RetryAfter)
+		return
+	}
 	kind, token := r.PathValue("kind"), r.PathValue("token")
 	in, err := s.Intakes.Authenticate(r.Context(), kind, token)
 	if err != nil {
 		// Same answer for a wrong kind or token: nothing to probe.
 		writeError(w, http.StatusNotFound, "not_found", "no such intake")
+		return
+	}
+	if res := s.HookAddresses.Allow(in.ID); !res.OK {
+		if res.First {
+			s.Log.Warn("hook.rate_limited", "intake_id", in.ID, "kind", kind, "per_minute", s.HookAddresses.PerMinute())
+			_ = s.Intakes.Received(r.Context(), in.ID, fmt.Sprintf("rate limited: more than %d a minute", s.HookAddresses.PerMinute()))
+		}
+		tooFast(w, res.RetryAfter)
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, hookMaxBody))
@@ -82,6 +104,13 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 	_ = s.Intakes.Received(r.Context(), in.ID, result)
 	s.Log.Info("hook.received", "intake_id", in.ID, "kind", kind, "events", len(out), "ignored", res.Ignored)
 	writeJSON(w, http.StatusOK, map[string]any{"events": out, "ignored": res.Ignored, "rejected": problems})
+}
+
+// tooFast answers 429 with the whole seconds to wait.
+func tooFast(w http.ResponseWriter, wait time.Duration) {
+	secs := max(1, int(math.Ceil(wait.Seconds())))
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	writeError(w, http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("too many requests; try again in %d seconds", secs))
 }
 
 // intakeURL is the address a service posts to. BOOP_INTAKE_URL wins (the

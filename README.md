@@ -282,7 +282,7 @@ All endpoints are under `/api/v1` (except the Sentry envelope endpoint). Errors 
 | GET/POST | `/api/v1/clients` | admin | List / create clients |
 | GET/PATCH/DELETE | `/api/v1/clients/:id` | admin | Manage, including routing (`push_levels`, `push_recoveries`) |
 | GET | `/api/v1/clients/:id/summary?month=YYYY-MM&tz=` | admin | Monthly summary (default: this month, `BOOP_TIMEZONE`); `/summary.md` is the Markdown download |
-| GET/POST | `/hooks/:kind/:token` | intake token | Webhook intake: `sentry`, `healthchecks`, `uptime-kuma`, `github`, `nightwatch`, `generic` |
+| GET/POST | `/hooks/:kind/:token` | intake token | Webhook intake: `sentry`, `healthchecks`, `uptime-kuma`, `github`, `nightwatch`, `generic`. `404` for a wrong address, `429` over the [rate limits](#configuration) |
 | GET | `/api/v1/intakes` | admin | Intakes, with what each last received |
 | POST | `/api/v1/projects/:id/intakes` | admin | Create an intake; returns its address once |
 | PATCH/DELETE | `/api/v1/intakes/:id` | admin | Name, signing secret, mapping / remove |
@@ -321,6 +321,8 @@ Any client that supports Streamable HTTP with a custom header can connect the sa
 | `PORT` | | Used when `BOOP_PORT` is unset; hosts such as Railway inject it |
 | `BOOP_BASE_URL` | request origin | Public URL your phone can reach; used in the pairing QR, links in pushes, and the push contact |
 | `BOOP_INTAKE_URL` | `BOOP_BASE_URL` | Internet-reachable address shown for webhook intakes (`/hooks/...`), when it differs from the UI's |
+| `BOOP_HOOK_LIMIT` | `120` | Requests a minute one webhook address accepts; over it the sender gets `429` with `Retry-After`. `0` = no limit |
+| `BOOP_HOOK_SENDER_LIMIT` | `600` | Requests a minute one sender (IP address) may make to all webhook addresses together, wrong addresses included. `0` = no limit |
 | `BOOP_TIMEZONE` | `UTC` | IANA name (`America/Chicago`) for months and times in monthly summaries |
 | `BOOP_APP_NAME` | `Boop` | Name of the installed phone app |
 | `BOOP_DATABASE_PATH` | `/data/boop.db` | WAL mode, migrations applied on start |

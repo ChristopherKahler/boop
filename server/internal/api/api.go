@@ -27,6 +27,7 @@ import (
 	"github.com/chrisgreg/boop/server/internal/mcp"
 	"github.com/chrisgreg/boop/server/internal/pairing"
 	"github.com/chrisgreg/boop/server/internal/projects"
+	"github.com/chrisgreg/boop/server/internal/ratelimit"
 	"github.com/chrisgreg/boop/server/internal/routing"
 	"github.com/chrisgreg/boop/server/internal/settings"
 	"github.com/chrisgreg/boop/server/internal/silences"
@@ -59,8 +60,12 @@ type Server struct {
 	// ActionSecret signs the Acknowledge tokens carried in pushes.
 	ActionSecret []byte
 	Admin        *auth.Admin // web UI / admin API login; open when not enabled
-	StartedAt    time.Time
-	Web          http.Handler
+	// HookAddresses limits requests to each webhook address and HookSenders
+	// requests from each sender to all of them; nil means no limit.
+	HookAddresses *ratelimit.Limiter
+	HookSenders   *ratelimit.Limiter
+	StartedAt     time.Time
+	Web           http.Handler
 }
 
 // Handler builds the router.

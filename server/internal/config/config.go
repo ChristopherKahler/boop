@@ -28,6 +28,11 @@ type Config struct {
 	Timezone string
 	// AppName is what the installed phone app is called on the home screen.
 	AppName string
+	// HookLimit caps requests a minute to one webhook address, and
+	// HookSenderLimit requests a minute from one sender to all of them
+	// (0 turns a limit off). Over the limit the hub answers 429.
+	HookLimit       int
+	HookSenderLimit int
 
 	// Optional admin login for the web UI and admin API. Both must be set to enable it.
 	AdminUser     string
@@ -93,18 +98,20 @@ func (a APNS) Missing() []string {
 // Load reads configuration from the environment, applying defaults.
 func Load() (Config, error) {
 	c := Config{
-		Port:          8080,
-		BaseURL:       env("BOOP_BASE_URL", ""),
-		DatabasePath:  env("BOOP_DATABASE_PATH", "/data/boop.db"),
-		RetentionDays: 90,
-		LogLevel:      env("BOOP_LOG_LEVEL", "info"),
-		AppName:       strings.TrimSpace(env("BOOP_APP_NAME", "Boop")),
-		Timezone:      strings.TrimSpace(env("BOOP_TIMEZONE", "UTC")),
-		IntakeURL:     strings.TrimRight(strings.TrimSpace(env("BOOP_INTAKE_URL", "")), "/"),
-		AdminUser:     env("BOOP_ADMIN_USER", ""),
-		AdminPassword: env("BOOP_ADMIN_PASSWORD", ""),
-		AllowNoLogin:  env("BOOP_ALLOW_NO_LOGIN", "") == "true",
-		MCPToken:      strings.TrimSpace(env("BOOP_MCP_TOKEN", "")),
+		Port:            8080,
+		HookLimit:       120,
+		HookSenderLimit: 600,
+		BaseURL:         env("BOOP_BASE_URL", ""),
+		DatabasePath:    env("BOOP_DATABASE_PATH", "/data/boop.db"),
+		RetentionDays:   90,
+		LogLevel:        env("BOOP_LOG_LEVEL", "info"),
+		AppName:         strings.TrimSpace(env("BOOP_APP_NAME", "Boop")),
+		Timezone:        strings.TrimSpace(env("BOOP_TIMEZONE", "UTC")),
+		IntakeURL:       strings.TrimRight(strings.TrimSpace(env("BOOP_INTAKE_URL", "")), "/"),
+		AdminUser:       env("BOOP_ADMIN_USER", ""),
+		AdminPassword:   env("BOOP_ADMIN_PASSWORD", ""),
+		AllowNoLogin:    env("BOOP_ALLOW_NO_LOGIN", "") == "true",
+		MCPToken:        strings.TrimSpace(env("BOOP_MCP_TOKEN", "")),
 		APNS: APNS{
 			TeamID:         env("APNS_TEAM_ID", ""),
 			KeyID:          env("APNS_KEY_ID", ""),
@@ -127,6 +134,15 @@ func Load() (Config, error) {
 				return c, fmt.Errorf("%s must be a port number, got %q", name, v)
 			}
 			c.Port = p
+		}
+	}
+	for name, dst := range map[string]*int{"BOOP_HOOK_LIMIT": &c.HookLimit, "BOOP_HOOK_SENDER_LIMIT": &c.HookSenderLimit} {
+		if v := os.Getenv(name); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return c, fmt.Errorf("%s must be a number of requests a minute (0 = no limit), got %q", name, v)
+			}
+			*dst = n
 		}
 	}
 	if v := os.Getenv("BOOP_RETENTION_DAYS"); v != "" {
