@@ -21,6 +21,9 @@ const (
 	KeyVAPIDPublic  = "vapid_public_key"
 	KeyVAPIDPrivate = "vapid_private_key"
 	KeyActionSecret = "action_secret" // signs Acknowledge tokens in pushes
+	// The login created in the setup screen (when not set by environment).
+	KeyAdminUser         = "admin_user"
+	KeyAdminPasswordHash = "admin_password_hash"
 )
 
 // Store reads and writes settings.

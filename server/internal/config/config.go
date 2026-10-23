@@ -32,6 +32,9 @@ type Config struct {
 	// Optional admin login for the web UI and admin API. Both must be set to enable it.
 	AdminUser     string
 	AdminPassword string
+	// AllowNoLogin runs without any login when no credentials exist. Only for
+	// a hub that sits behind your own private proxy or VPN.
+	AllowNoLogin bool
 
 	// MCPToken, when set, is a bearer token that grants read-only access to the
 	// MCP endpoint (/mcp). Device credentials and admin logins work there too.
@@ -100,6 +103,7 @@ func Load() (Config, error) {
 		IntakeURL:     strings.TrimRight(strings.TrimSpace(env("BOOP_INTAKE_URL", "")), "/"),
 		AdminUser:     env("BOOP_ADMIN_USER", ""),
 		AdminPassword: env("BOOP_ADMIN_PASSWORD", ""),
+		AllowNoLogin:  env("BOOP_ALLOW_NO_LOGIN", "") == "true",
 		MCPToken:      strings.TrimSpace(env("BOOP_MCP_TOKEN", "")),
 		APNS: APNS{
 			TeamID:         env("APNS_TEAM_ID", ""),

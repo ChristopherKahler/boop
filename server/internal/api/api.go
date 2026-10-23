@@ -73,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/auth/me", s.authMe)
 	mux.HandleFunc("POST /api/v1/auth/login", s.authLogin)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.authLogout)
+	mux.HandleFunc("POST /api/v1/auth/setup", s.authSetup)
 
 	// Event ingestion: project API key.
 	mux.Handle("POST /api/v1/events", s.projectAuth(s.createEvent))
@@ -306,12 +307,36 @@ func (s *Server) adminAuth(next http.HandlerFunc) http.Handler {
 // ---- admin session ----
 
 func (s *Server) authMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"auth_required": s.Admin.Enabled(), "authenticated": s.Admin.Authorized(r)})
+	ok := s.Admin.Authorized(r)
+	// Each visit renews the session, so the installed phone app stays signed
+	// in as long as it is opened now and then.
+	if c, err := r.Cookie(auth.SessionCookie); ok && err == nil && s.Admin.Renew(c.Value) {
+		s.Admin.SetCookie(w, r, c.Value)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"auth_required": s.Admin.Enabled(), "authenticated": ok, "needs_setup": s.Admin.NeedsSetup()})
+}
+
+// tooMany answers 429 while an address is locked out after failed attempts.
+func (s *Server) tooMany(w http.ResponseWriter, r *http.Request) bool {
+	blocked, wait := s.Admin.Limiter().Blocked(auth.ClientIP(r))
+	if !blocked {
+		return false
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+	writeError(w, http.StatusTooManyRequests, "too_many_attempts", "too many failed attempts; try again in "+wait.Round(time.Minute).String())
+	return true
 }
 
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	if !s.Admin.Enabled() {
 		writeJSON(w, http.StatusOK, map[string]any{"auth_required": false, "authenticated": true})
+		return
+	}
+	if s.Admin.NeedsSetup() {
+		writeError(w, http.StatusConflict, "needs_setup", "no login exists yet: create one with the setup code from the server log")
+		return
+	}
+	if s.tooMany(w, r) {
 		return
 	}
 	var in struct {
@@ -323,14 +348,70 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, ok := s.Admin.Login(in.Username, in.Password)
 	if !ok {
-		// Slow down guessing a little; there is one account and no lockout.
+		s.Admin.Limiter().Fail(auth.ClientIP(r))
 		time.Sleep(400 * time.Millisecond)
-		s.Log.Warn("auth.login_failed", "remote", r.RemoteAddr)
+		s.Log.Warn("auth.login_failed", "remote", auth.ClientIP(r))
 		writeError(w, http.StatusUnauthorized, "bad_credentials", "wrong username or password")
 		return
 	}
+	s.Admin.Limiter().Reset(auth.ClientIP(r))
 	s.Admin.SetCookie(w, r, tok)
-	s.Log.Info("auth.login", "remote", r.RemoteAddr)
+	s.Log.Info("auth.login", "remote", auth.ClientIP(r))
+	writeJSON(w, http.StatusOK, map[string]any{"auth_required": true, "authenticated": true})
+}
+
+// authSetup creates the login on a fresh install. It needs the one-time setup
+// code the server printed in its log, so a hub that is already public cannot
+// be claimed by a stranger who finds it first.
+func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
+	if !s.Admin.NeedsSetup() {
+		writeError(w, http.StatusConflict, "already_set_up", "a login already exists")
+		return
+	}
+	if s.tooMany(w, r) {
+		return
+	}
+	var in struct {
+		Code     string `json:"code"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if !s.Admin.CheckSetupCode(in.Code) {
+		s.Admin.Limiter().Fail(auth.ClientIP(r))
+		s.Log.Warn("auth.setup_bad_code", "remote", auth.ClientIP(r))
+		writeError(w, http.StatusUnauthorized, "bad_setup_code", "that setup code is not right; it is in the server log, on the line auth.setup_required")
+		return
+	}
+	user := strings.TrimSpace(in.Username)
+	if user == "" || len(user) > 60 {
+		writeError(w, http.StatusUnprocessableEntity, "invalid", "the user name must be 1-60 characters")
+		return
+	}
+	if err := auth.ValidatePassword(in.Password); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "invalid", err.Error())
+		return
+	}
+	hash, err := auth.HashPassword(in.Password)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	ctx := r.Context()
+	if err := s.Settings.Set(ctx, settings.KeyAdminUser, user); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if err := s.Settings.Set(ctx, settings.KeyAdminPasswordHash, hash); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.Admin.UseStoredLogin(user, hash)
+	s.Admin.Limiter().Reset(auth.ClientIP(r))
+	s.Admin.SetCookie(w, r, s.Admin.NewSession(r.UserAgent()))
+	s.Log.Info("auth.setup_completed", "user", user, "remote", auth.ClientIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"auth_required": true, "authenticated": true})
 }
 

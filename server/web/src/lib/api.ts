@@ -270,6 +270,8 @@ export interface Status {
 export interface AuthState {
   auth_required: boolean
   authenticated: boolean
+  /** A fresh install: no login exists yet (create it with the setup code). */
+  needs_setup?: boolean
 }
 
 export interface Settings {
@@ -318,6 +320,7 @@ export const api = {
   me: () => request<AuthState>('GET', '/api/v1/auth/me'),
   login: (username: string, password: string) => request<AuthState>('POST', '/api/v1/auth/login', { username, password }),
   logout: () => request<void>('POST', '/api/v1/auth/logout'),
+  setupLogin: (code: string, username: string, password: string) => request<AuthState>('POST', '/api/v1/auth/setup', { code, username, password }),
 
   status: () => request<Status>('GET', '/api/v1/status'),
   settings: () => request<Settings>('GET', '/api/v1/settings'),
