@@ -23,6 +23,7 @@ import (
 	"github.com/chrisgreg/boop/server/internal/delivery"
 	"github.com/chrisgreg/boop/server/internal/devices"
 	"github.com/chrisgreg/boop/server/internal/events"
+	"github.com/chrisgreg/boop/server/internal/intake"
 	"github.com/chrisgreg/boop/server/internal/pairing"
 	"github.com/chrisgreg/boop/server/internal/projects"
 	"github.com/chrisgreg/boop/server/internal/settings"
@@ -73,6 +74,7 @@ func newEnv(t *testing.T) *env {
 		Clients:    clients.New(db),
 		Projects:   projects.New(db),
 		Alerts:     alerts.New(db),
+		Intakes:    intake.New(db),
 		Devices:    dev,
 		Pairing:    pairing.New(db, dev),
 		Events:     events.New(db),

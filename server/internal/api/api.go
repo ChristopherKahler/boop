@@ -23,6 +23,7 @@ import (
 	"github.com/chrisgreg/boop/server/internal/events"
 	"github.com/chrisgreg/boop/server/internal/events/levels"
 	"github.com/chrisgreg/boop/server/internal/events/redact"
+	"github.com/chrisgreg/boop/server/internal/intake"
 	"github.com/chrisgreg/boop/server/internal/mcp"
 	"github.com/chrisgreg/boop/server/internal/pairing"
 	"github.com/chrisgreg/boop/server/internal/projects"
@@ -44,6 +45,7 @@ type Server struct {
 	Clients    *clients.Store
 	Projects   *projects.Store
 	Alerts     *alerts.Store
+	Intakes    *intake.Store
 	Devices    *devices.Store
 	Pairing    *pairing.Store
 	Events     *events.Store
@@ -111,6 +113,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/webpush/subscriptions", s.adminAuth(s.webPushSubscribe))
 	mux.Handle("DELETE /api/v1/webpush/subscriptions", s.adminAuth(s.webPushUnsubscribe))
 	mux.HandleFunc("POST /api/v1/push/action", s.pushAction)
+
+	// Intakes: webhook addresses for monitoring services. /hooks/ is the only
+	// part of the hub that has to be reachable from the internet.
+	mux.HandleFunc("POST /hooks/{kind}/{token}", s.hook)
+	mux.HandleFunc("GET /hooks/{kind}/{token}", s.hook)
+	mux.Handle("GET /api/v1/intakes", s.adminAuth(s.listIntakes))
+	mux.Handle("POST /api/v1/projects/{id}/intakes", s.adminAuth(s.createIntake))
+	mux.Handle("PATCH /api/v1/intakes/{id}", s.adminAuth(s.updateIntake))
+	mux.Handle("POST /api/v1/intakes/{id}/rotate", s.adminAuth(s.rotateIntake))
+	mux.Handle("DELETE /api/v1/intakes/{id}", s.adminAuth(s.deleteIntake))
+	mux.Handle("POST /api/v1/intakes/preview", s.adminAuth(s.previewIntake))
 
 	// Clients: the level above projects, carrying the default routing.
 	mux.Handle("GET /api/v1/clients", s.adminAuth(s.listClients))
@@ -391,10 +404,10 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, projects.ErrNotFound), errors.Is(err, events.ErrNotFound), errors.Is(err, devices.ErrNotFound), errors.Is(err, pairing.ErrNotFound), errors.Is(err, silences.ErrNotFound),
-		errors.Is(err, clients.ErrNotFound), errors.Is(err, alerts.ErrNotFound):
+		errors.Is(err, clients.ErrNotFound), errors.Is(err, alerts.ErrNotFound), errors.Is(err, intake.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, projects.ErrInvalid), errors.Is(err, events.ErrInvalid), errors.Is(err, devices.ErrInvalid), errors.Is(err, silences.ErrInvalid),
-		errors.Is(err, clients.ErrInvalid), errors.Is(err, alerts.ErrInvalid):
+		errors.Is(err, clients.ErrInvalid), errors.Is(err, alerts.ErrInvalid), errors.Is(err, intake.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, "invalid", err.Error())
 	case errors.Is(err, clients.ErrInUse), errors.Is(err, alerts.ErrConflict):
 		writeError(w, http.StatusConflict, "conflict", err.Error())

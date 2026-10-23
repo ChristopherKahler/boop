@@ -113,6 +113,41 @@ export interface Event {
   route?: string
 }
 
+export type IntakeKind = 'sentry' | 'healthchecks' | 'uptime-kuma' | 'github' | 'nightwatch' | 'generic'
+
+/** A webhook address for one monitoring service on one project. */
+export interface Intake {
+  id: string
+  project_id: string
+  project_name: string
+  client_name: string
+  kind: IntakeKind
+  name: string
+  token_hint: string
+  signing_secret_set: boolean
+  mapping: Record<string, unknown>
+  received_count: number
+  last_received_at: string | null
+  last_result: string
+  created_at: string
+}
+
+export interface IntakeCreated extends Intake {
+  token: string
+  url: string
+}
+
+/** What a webhook payload turns into (the preview endpoint). */
+export interface MappedEvent {
+  title: string
+  body?: string
+  level?: Level
+  fingerprint?: string
+  source?: string
+  resolve?: boolean
+  actions?: EventAction[]
+}
+
 export type SilenceField = 'fingerprint' | 'title' | 'source'
 
 export interface Silence {
@@ -264,6 +299,15 @@ export const api = {
   acknowledge: (id: string) => request<Alert>('POST', `/api/v1/alerts/${encodeURIComponent(id)}/acknowledge${byQuery()}`),
   resolve: (id: string) => request<Alert>('POST', `/api/v1/alerts/${encodeURIComponent(id)}/resolve${byQuery()}`),
   reopen: (id: string) => request<Alert>('POST', `/api/v1/alerts/${encodeURIComponent(id)}/reopen`),
+
+  intakes: (project?: string) => request<{ intakes: Intake[]; kinds: { kind: IntakeKind; label: string }[] }>('GET', '/api/v1/intakes' + (project ? '?project=' + encodeURIComponent(project) : '')),
+  createIntake: (project: string, input: { kind: IntakeKind; name?: string; signing_secret?: string; mapping?: unknown }) =>
+    request<IntakeCreated>('POST', `/api/v1/projects/${project}/intakes`, input),
+  updateIntake: (id: string, patch: { name?: string; signing_secret?: string; mapping?: unknown }) => request<Intake>('PATCH', `/api/v1/intakes/${id}`, patch),
+  rotateIntake: (id: string) => request<IntakeCreated>('POST', `/api/v1/intakes/${id}/rotate`),
+  deleteIntake: (id: string) => request<void>('DELETE', `/api/v1/intakes/${id}`),
+  previewIntake: (kind: IntakeKind, payload: unknown, mapping?: unknown, headers?: Record<string, string>) =>
+    request<{ events: MappedEvent[]; ignored: string }>('POST', '/api/v1/intakes/preview', { kind, payload, mapping, headers }),
 
   clients: () => request<{ clients: Client[] }>('GET', '/api/v1/clients'),
   createClient: (input: { name: string; push_levels?: Level[]; push_recoveries?: boolean }) => request<Client>('POST', '/api/v1/clients', input),

@@ -18,6 +18,9 @@ type Config struct {
 	// value then overrides whatever was saved from the web UI on every start.
 	RetentionDaysSet bool
 	LogLevel         string
+	// IntakeURL is the public, internet-reachable base address that monitoring
+	// services post webhooks to (/hooks/...). Defaults to BaseURL.
+	IntakeURL string
 	// AppName is what the installed phone app is called on the home screen.
 	AppName string
 
@@ -88,6 +91,7 @@ func Load() (Config, error) {
 		RetentionDays: 90,
 		LogLevel:      env("BOOP_LOG_LEVEL", "info"),
 		AppName:       strings.TrimSpace(env("BOOP_APP_NAME", "Boop")),
+		IntakeURL:     strings.TrimRight(strings.TrimSpace(env("BOOP_INTAKE_URL", "")), "/"),
 		AdminUser:     env("BOOP_ADMIN_USER", ""),
 		AdminPassword: env("BOOP_ADMIN_PASSWORD", ""),
 		MCPToken:      strings.TrimSpace(env("BOOP_MCP_TOKEN", "")),
