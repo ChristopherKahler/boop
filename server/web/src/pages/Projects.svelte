@@ -2,6 +2,7 @@
   import { api, type Client, type Level, type Project, type ProjectCreated } from '../lib/api'
   import { LEVEL_LABEL } from '../lib/levels'
   import { relative } from '../lib/format'
+  import { link } from '../lib/router.svelte'
   import Card from '../lib/ui/Card.svelte'
   import Button from '../lib/ui/Button.svelte'
   import Input from '../lib/ui/Input.svelte'
@@ -178,6 +179,7 @@
             <div class="cname"><span class="n">{c.name}</span><span class="mono muted caption">{c.slug}</span></div>
             <div class="muted caption">Pushes {levelsText(c.push_levels)}{c.push_recoveries ? ' · recoveries push' : ''} · {c.project_count} project{c.project_count === 1 ? '' : 's'}</div>
           </div>
+          <a href="/clients/{c.slug}/summary" onclick={link} class="small">Monthly summary</a>
           <Button variant="ghost" size="sm" onclick={() => (editingClient = editingClient === c.id ? null : c.id)}>{editingClient === c.id ? 'Close' : 'Routing'}</Button>
         </div>
 

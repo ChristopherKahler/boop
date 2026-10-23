@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -240,4 +243,44 @@ func join(v any) string {
 		out += x.(string)
 	}
 	return out
+}
+
+func TestClientSummaryEndpoints(t *testing.T) {
+	e := newEnv(t)
+	e.do("POST", "/api/v1/clients", "", map[string]any{"name": "Acme"})
+	key := e.do("POST", "/api/v1/projects", "", map[string]any{"name": "Site", "client_id": "acme"}).body["api_key"].(string)
+	ev := e.do("POST", "/api/v1/events", key, map[string]any{"title": "Site down", "level": "error", "fingerprint": "kuma:1"}).body
+	e.do("POST", "/api/v1/alerts/"+ev["alert_id"].(string)+"/acknowledge", "", nil)
+	e.do("POST", "/api/v1/events", key, map[string]any{"title": "Site up", "fingerprint": "kuma:1", "resolve": true})
+
+	r := e.do("GET", "/api/v1/clients/acme/summary?tz=America/Chicago", "", nil)
+	if r.status != 200 || r.body["client_name"] != "Acme" || r.body["timezone"] != "America/Chicago" {
+		t.Fatalf("summary: %d %s", r.status, r.raw)
+	}
+	tot := r.body["totals"].(map[string]any)
+	if tot["alerts"] != float64(1) || tot["recovered"] != float64(1) || tot["acknowledged"] != float64(1) || tot["events"] != float64(2) {
+		t.Errorf("totals = %v", tot)
+	}
+	month := r.body["month"].(string)
+	req, _ := http.NewRequest("GET", e.srv.URL+"/api/v1/clients/acme/summary.md?month="+month+"&tz=America/Chicago", nil)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	md, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/markdown") ||
+		!strings.Contains(res.Header.Get("Content-Disposition"), `filename="acme-monitoring-`+month+`.md"`) ||
+		!strings.Contains(string(md), "# Monitoring summary: Acme,") || !strings.Contains(string(md), "Recovered on its own") {
+		t.Errorf("markdown: %d %v\n%s", res.StatusCode, res.Header, md)
+	}
+	for path, want := range map[string]int{
+		"/api/v1/clients/nobody/summary":            404,
+		"/api/v1/clients/acme/summary?month=Oct":    422,
+		"/api/v1/clients/acme/summary?tz=Mars/Base": 422,
+	} {
+		if r := e.do("GET", path, "", nil); r.status != want {
+			t.Errorf("%s: %d, want %d", path, r.status, want)
+		}
+	}
 }

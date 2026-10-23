@@ -5,6 +5,7 @@
   import StatusDot from './lib/ui/StatusDot.svelte'
   import Alerts from './pages/Alerts.svelte'
   import AlertDetail from './pages/AlertDetail.svelte'
+  import Summary from './pages/Summary.svelte'
   import Inbox from './pages/Inbox.svelte'
   import EventDetail from './pages/EventDetail.svelte'
   import Group from './pages/Group.svelte'
@@ -61,7 +62,7 @@
     { label: 'Settings', href: '/settings' },
   ]
   const activeTab = $derived(
-    route.name === 'alert' ? '/' : route.name === 'event' || route.name === 'group' || route.name === 'inbox' ? '/events' : router.path,
+    route.name === 'alert' ? '/' : route.name === 'summary' ? '/projects' : route.name === 'event' || route.name === 'group' || route.name === 'inbox' ? '/events' : router.path,
   )
 </script>
 
@@ -99,6 +100,8 @@
           <Alerts />
         {:else if route.name === 'alert'}
           <AlertDetail id={route.params.id} />
+        {:else if route.name === 'summary'}
+          <Summary id={route.params.id} />
         {:else if route.name === 'inbox'}
           <Inbox />
         {:else if route.name === 'event'}

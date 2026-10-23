@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
+	_ "time/tzdata" // timezone names work on hosts without a zoneinfo database (Windows, slim containers)
 )
 
 // Config is the full server configuration.
@@ -21,6 +23,9 @@ type Config struct {
 	// IntakeURL is the public, internet-reachable base address that monitoring
 	// services post webhooks to (/hooks/...). Defaults to BaseURL.
 	IntakeURL string
+	// Timezone sets the month boundaries and times in monthly summaries
+	// (an IANA name such as America/Chicago). Defaults to UTC.
+	Timezone string
 	// AppName is what the installed phone app is called on the home screen.
 	AppName string
 
@@ -91,6 +96,7 @@ func Load() (Config, error) {
 		RetentionDays: 90,
 		LogLevel:      env("BOOP_LOG_LEVEL", "info"),
 		AppName:       strings.TrimSpace(env("BOOP_APP_NAME", "Boop")),
+		Timezone:      strings.TrimSpace(env("BOOP_TIMEZONE", "UTC")),
 		IntakeURL:     strings.TrimRight(strings.TrimSpace(env("BOOP_INTAKE_URL", "")), "/"),
 		AdminUser:     env("BOOP_ADMIN_USER", ""),
 		AdminPassword: env("BOOP_ADMIN_PASSWORD", ""),
@@ -133,6 +139,12 @@ func Load() (Config, error) {
 	}
 	if c.MCPToken != "" && len(c.MCPToken) < 16 {
 		return c, fmt.Errorf("BOOP_MCP_TOKEN must be at least 16 characters")
+	}
+	if c.Timezone == "" {
+		c.Timezone = "UTC"
+	}
+	if _, err := time.LoadLocation(c.Timezone); err != nil {
+		return c, fmt.Errorf("BOOP_TIMEZONE must be a timezone name such as America/Chicago, got %q", c.Timezone)
 	}
 	if (c.WebPush.PublicKey == "") != (c.WebPush.PrivateKey == "") {
 		return c, fmt.Errorf("BOOP_VAPID_PUBLIC_KEY and BOOP_VAPID_PRIVATE_KEY must be set together (generate a pair with: boop vapid)")

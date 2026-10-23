@@ -148,6 +148,49 @@ export interface MappedEvent {
   actions?: EventAction[]
 }
 
+export interface SummaryDurations {
+  count: number
+  median_seconds: number
+  average_seconds: number
+  fastest_seconds: number
+  slowest_seconds: number
+}
+
+export interface SummaryAlert {
+  id: string
+  project: string
+  title: string
+  level: Level
+  source: string
+  first_seen: string
+  last_seen: string
+  count: number
+  status: 'open' | 'resolved' | 'recovered'
+  time_to_acknowledge_seconds: number | null
+  time_to_resolve_seconds: number | null
+}
+
+/** One client's month (GET /api/v1/clients/{id}/summary). */
+export interface ClientSummary {
+  client_id: string
+  client_name: string
+  client_slug: string
+  month: string
+  month_label: string
+  timezone: string
+  totals: { alerts: number; resolved: number; recovered: number; resolved_by_hand: number; still_open: number; acknowledged: number; occurrences: number; events: number; pushes: number }
+  by_level: { level: Level; count: number }[]
+  projects: { project: string; alerts: number; open: number }[]
+  time_to_acknowledge: SummaryDurations
+  time_to_resolve: SummaryDurations
+  alerts: SummaryAlert[]
+  recoveries: SummaryAlert[]
+  carried_over: number
+  previous_month: string
+  next_month: string
+  retention_note?: string
+}
+
 export type SilenceField = 'fingerprint' | 'title' | 'source'
 
 export interface Silence {
@@ -308,6 +351,9 @@ export const api = {
   deleteIntake: (id: string) => request<void>('DELETE', `/api/v1/intakes/${id}`),
   previewIntake: (kind: IntakeKind, payload: unknown, mapping?: unknown, headers?: Record<string, string>) =>
     request<{ events: MappedEvent[]; ignored: string }>('POST', '/api/v1/intakes/preview', { kind, payload, mapping, headers }),
+
+  clientSummary: (id: string, month?: string) =>
+    request<ClientSummary>('GET', `/api/v1/clients/${encodeURIComponent(id)}/summary` + (month ? '?month=' + encodeURIComponent(month) : '')),
 
   clients: () => request<{ clients: Client[] }>('GET', '/api/v1/clients'),
   createClient: (input: { name: string; push_levels?: Level[]; push_recoveries?: boolean }) => request<Client>('POST', '/api/v1/clients', input),

@@ -6,6 +6,7 @@ describe('parseRoute', () => {
     expect(parseRoute('/')).toEqual({ name: 'alerts', params: {} })
     expect(parseRoute('/alerts/alr_abc')).toEqual({ name: 'alert', params: { id: 'alr_abc' } })
     expect(parseRoute('/events')).toEqual({ name: 'inbox', params: {} })
+    expect(parseRoute('/clients/acme-motors/summary')).toEqual({ name: 'summary', params: { id: 'acme-motors' } })
     expect(parseRoute('/events/evt_abc')).toEqual({ name: 'event', params: { id: 'evt_abc' } })
     expect(parseRoute('/projects/')).toEqual({ name: 'projects', params: {} })
     expect(parseRoute('/settings')).toEqual({ name: 'settings', params: {} })

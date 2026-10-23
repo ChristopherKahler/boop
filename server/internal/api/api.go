@@ -131,6 +131,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/clients/{id}", s.adminAuth(s.getClient))
 	mux.Handle("PATCH /api/v1/clients/{id}", s.adminAuth(s.updateClient))
 	mux.Handle("DELETE /api/v1/clients/{id}", s.adminAuth(s.deleteClient))
+	mux.Handle("GET /api/v1/clients/{id}/summary", s.adminAuth(s.clientSummary))
+	mux.Handle("GET /api/v1/clients/{id}/summary.md", s.adminAuth(s.clientSummaryMarkdown))
 
 	// Admin.
 	mux.Handle("GET /api/v1/projects", s.adminAuth(s.listProjects))
