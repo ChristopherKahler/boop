@@ -157,17 +157,12 @@ func (s *Server) ingestEnvelope(ctx context.Context, p projects.Project, body []
 	return firstID, count
 }
 
-// ingestOne stores one mapped event and pushes it unless a silence rule matches,
-// reporting whether it was actually stored.
+// ingestOne runs one mapped event through the intake pipeline, reporting
+// whether it was actually stored.
 func (s *Server) ingestOne(ctx context.Context, p projects.Project, in events.Input) bool {
-	e, err := s.Events.Create(ctx, p.ID, in, s.redactor(ctx))
-	if err != nil {
+	if _, err := s.ingestAndEnqueue(ctx, p, in, "sentry"); err != nil {
 		s.Log.Warn("sentry.event_rejected", "project_id", p.ID, "error", err.Error())
 		return false
-	}
-	s.Log.Info("event.created", "event_id", e.ID, "project_id", p.ID, "event_level", e.Level, "via", "sentry")
-	if silenced := s.applySilence(ctx, &e); !silenced {
-		s.Dispatcher.Enqueue(e, p)
 	}
 	return true
 }

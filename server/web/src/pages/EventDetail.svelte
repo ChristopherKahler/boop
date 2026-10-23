@@ -104,7 +104,7 @@
 
 <div class="stack">
   <div class="crumb-row">
-    <div class="crumb"><a href="/" onclick={link}>Inbox</a><span class="faint">/</span><span class="muted mono">{id}</span></div>
+    <div class="crumb"><a href="/events" onclick={link}>Events</a><span class="faint">/</span><span class="muted mono">{id}</span></div>
     {#if event}
       <Button variant="secondary" size="sm" onclick={() => (silenceOpen = !silenceOpen)} disabled={silenceBusy}>{silenceOpen ? 'Cancel' : 'Silence events like this'}</Button>
     {/if}
@@ -154,7 +154,7 @@
         <div class="row" style="margin-top: 12px; flex-wrap: wrap">
           <Button variant="secondary" size="sm" onclick={unsilence} disabled={silenceBusy}>Unsilence and push now</Button>
           {#if rule}<Button variant="danger" size="sm" onclick={removeRule} disabled={silenceBusy}>Remove rule</Button>{/if}
-          <a href="/?silenced=true" onclick={link} class="small">All silenced events</a>
+          <a href="/events?silenced=true" onclick={link} class="small">All silenced events</a>
         </div>
       </Card>
     {/if}
@@ -164,6 +164,7 @@
     <Card>
       <div class="head">
         <div class="meta">
+          {#if event.client_name}<span class="secondary">{event.client_name}</span><span class="faint">·</span>{/if}
           <span class="secondary proj"><ProjectIcon icon={event.project_icon} size={14} /><span>{event.project_name}</span></span>
           <span class="faint">·</span>
           <LevelBadge level={event.level} />
@@ -177,6 +178,8 @@
       <div class="facts">
         <div><span class="k">Occurred</span><span title={event.occurred_at}>{fullDate(event.occurred_at)}</span></div>
         <div><span class="k">Received</span><span title={event.created_at}>{fullDate(event.created_at)} · {relative(event.created_at)}</span></div>
+        {#if event.alert_id}<div><span class="k">Alert</span><span><a href="/alerts/{event.alert_id}" onclick={link}>Open the alert</a></span></div>{/if}
+        {#if event.route}<div><span class="k">Routing</span><span>{event.route}</span></div>{/if}
         {#if event.fingerprint}<div><span class="k">Fingerprint</span><span class="mono">{event.fingerprint} <a class="small" href={groupPath(event.project_id, event.fingerprint)} onclick={link}>all occurrences</a></span></div>{/if}
         {#if event.external_id}<div><span class="k">External id</span><span class="mono">{event.external_id}</span></div>{/if}
         <div><span class="k">Event id</span><span class="mono">{event.id}</span></div>

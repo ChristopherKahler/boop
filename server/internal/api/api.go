@@ -13,8 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chrisgreg/boop/server/internal/alerts"
 	"github.com/chrisgreg/boop/server/internal/apns"
 	"github.com/chrisgreg/boop/server/internal/auth"
+	"github.com/chrisgreg/boop/server/internal/clients"
 	"github.com/chrisgreg/boop/server/internal/config"
 	"github.com/chrisgreg/boop/server/internal/delivery"
 	"github.com/chrisgreg/boop/server/internal/devices"
@@ -24,6 +26,7 @@ import (
 	"github.com/chrisgreg/boop/server/internal/mcp"
 	"github.com/chrisgreg/boop/server/internal/pairing"
 	"github.com/chrisgreg/boop/server/internal/projects"
+	"github.com/chrisgreg/boop/server/internal/routing"
 	"github.com/chrisgreg/boop/server/internal/settings"
 	"github.com/chrisgreg/boop/server/internal/silences"
 )
@@ -37,7 +40,9 @@ type Server struct {
 	DB         *sql.DB
 	Log        *slog.Logger
 	Settings   *settings.Store
+	Clients    *clients.Store
 	Projects   *projects.Store
+	Alerts     *alerts.Store
 	Devices    *devices.Store
 	Pairing    *pairing.Store
 	Events     *events.Store
@@ -84,6 +89,21 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/pairing", s.adminAuth(s.listPairing))
 	mux.Handle("DELETE /api/v1/pairing/{id}", s.adminAuth(s.revokePairing))
 	mux.HandleFunc("POST /api/v1/pairing/exchange", s.exchangePairing)
+
+	// Alerts: one row per problem, with acknowledge and resolve. Readable and
+	// actionable by the web UI or a paired device.
+	mux.Handle("GET /api/v1/alerts", s.readerAuth(s.listAlerts))
+	mux.Handle("GET /api/v1/alerts/{id}", s.readerAuth(s.getAlert))
+	mux.Handle("POST /api/v1/alerts/{id}/acknowledge", s.readerAuth(s.acknowledgeAlert))
+	mux.Handle("POST /api/v1/alerts/{id}/resolve", s.readerAuth(s.resolveAlert))
+	mux.Handle("POST /api/v1/alerts/{id}/reopen", s.readerAuth(s.reopenAlert))
+
+	// Clients: the level above projects, carrying the default routing.
+	mux.Handle("GET /api/v1/clients", s.adminAuth(s.listClients))
+	mux.Handle("POST /api/v1/clients", s.adminAuth(s.createClient))
+	mux.Handle("GET /api/v1/clients/{id}", s.adminAuth(s.getClient))
+	mux.Handle("PATCH /api/v1/clients/{id}", s.adminAuth(s.updateClient))
+	mux.Handle("DELETE /api/v1/clients/{id}", s.adminAuth(s.deleteClient))
 
 	// Admin.
 	mux.Handle("GET /api/v1/projects", s.adminAuth(s.listProjects))
@@ -356,10 +376,14 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 // fail maps domain errors to HTTP responses.
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, projects.ErrNotFound), errors.Is(err, events.ErrNotFound), errors.Is(err, devices.ErrNotFound), errors.Is(err, pairing.ErrNotFound), errors.Is(err, silences.ErrNotFound):
+	case errors.Is(err, projects.ErrNotFound), errors.Is(err, events.ErrNotFound), errors.Is(err, devices.ErrNotFound), errors.Is(err, pairing.ErrNotFound), errors.Is(err, silences.ErrNotFound),
+		errors.Is(err, clients.ErrNotFound), errors.Is(err, alerts.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
-	case errors.Is(err, projects.ErrInvalid), errors.Is(err, events.ErrInvalid), errors.Is(err, devices.ErrInvalid), errors.Is(err, silences.ErrInvalid):
+	case errors.Is(err, projects.ErrInvalid), errors.Is(err, events.ErrInvalid), errors.Is(err, devices.ErrInvalid), errors.Is(err, silences.ErrInvalid),
+		errors.Is(err, clients.ErrInvalid), errors.Is(err, alerts.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, "invalid", err.Error())
+	case errors.Is(err, clients.ErrInUse), errors.Is(err, alerts.ErrConflict):
+		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, pairing.ErrInvalidToken):
 		writeError(w, http.StatusUnauthorized, "invalid_pairing_token", err.Error())
 	default:
@@ -588,21 +612,22 @@ func (s *Server) createEvent(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
-	e, err := s.Events.Create(r.Context(), p.ID, in, s.redactor(r.Context()))
+	res, err := s.ingestAndEnqueue(r.Context(), p, in, "api")
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.Log.Info("event.created", "event_id", e.ID, "project_id", p.ID, "event_level", e.Level)
-	if silenced := s.applySilence(r.Context(), &e); !silenced {
-		s.Dispatcher.Enqueue(e, p)
+	out := map[string]any{"id": res.Event.ID, "created_at": res.Event.CreatedAt, "pushed": res.Decision.Push, "route": res.Decision.Reason}
+	if res.Alert != nil {
+		out["alert_id"] = res.Alert.ID
+		out["alert"] = string(res.Change)
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"id": e.ID, "created_at": e.CreatedAt})
+	writeJSON(w, http.StatusCreated, out)
 }
 
 func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := events.Filter{ProjectID: q.Get("project"), Level: q.Get("level"), Source: q.Get("source"), Fingerprint: q.Get("fingerprint"), Before: q.Get("before"),
+	f := events.Filter{ProjectID: q.Get("project"), ClientID: q.Get("client"), AlertID: q.Get("alert"), Level: q.Get("level"), Source: q.Get("source"), Fingerprint: q.Get("fingerprint"), Before: q.Get("before"),
 		Since: q.Get("since"), Until: q.Get("until"), Grouped: q.Get("grouped") == "true" || q.Get("grouped") == "1"}
 	if f.Level != "" && !levels.Valid(f.Level) {
 		writeError(w, http.StatusUnprocessableEntity, "invalid", "level must be one of "+strings.Join(levels.All, ", "))
@@ -692,9 +717,20 @@ func (s *Server) unsilenceEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.SilenceID, e.Silenced = "", false
-	dl := s.Dispatcher.Deliver(ctx, e, p)
-	if dl == nil {
-		dl = []delivery.Delivery{}
+	// Route it as the alert it belongs to would have been when it opened.
+	att := alerts.Attachment{Change: alerts.None}
+	if e.AlertID != "" {
+		if a, err := s.Alerts.Get(ctx, e.AlertID); err == nil {
+			att = alerts.Attachment{Alert: &a, Change: alerts.Opened}
+		}
+	}
+	res := s.route(ctx, p, e, att, false)
+	e = res.Event
+	dl := []delivery.Delivery{}
+	if res.Message != nil {
+		if got := s.Dispatcher.Deliver(ctx, *res.Message); got != nil {
+			dl = got
+		}
 	}
 	s.Log.Info("event.unsilenced", "event_id", e.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"event": e, "deliveries": dl})
@@ -771,6 +807,9 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
+	if !s.resolveClient(w, r, &in.ClientID, true) {
+		return
+	}
 	p, key, err := s.Projects.Create(r.Context(), in)
 	if err != nil {
 		s.fail(w, err)
@@ -792,6 +831,9 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	var in projects.Input
 	if !readJSON(w, r, &in) {
+		return
+	}
+	if !s.resolveClient(w, r, &in.ClientID, false) {
 		return
 	}
 	p, err := s.Projects.Update(r.Context(), r.PathValue("id"), in)
@@ -932,6 +974,9 @@ func (s *Server) testNotification(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var in struct {
 		ProjectID string `json:"project_id"`
+		// Force pushes even when routing would keep a success event in the
+		// inbox; the web UI's "Send test push" button sets it.
+		Force bool `json:"force"`
 	}
 	if r.ContentLength != 0 {
 		if !readJSON(w, r, &in) {
@@ -953,21 +998,25 @@ func (s *Server) testNotification(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	e, err := s.Events.Create(ctx, p.ID, events.Input{
+	res, err := s.ingest(ctx, p, events.Input{
 		Title: "Test boop", Body: "If you can read this on your phone, Boop is working.", Level: levels.Success, Source: "boop",
 		Data: json.RawMessage(`{"test":true}`),
-	}, s.redactor(ctx))
+	}, "test")
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.Log.Info("event.created", "event_id", e.ID, "project_id", p.ID, "event_level", e.Level, "test", true)
-	var dl []delivery.Delivery
-	if !s.applySilence(ctx, &e) {
-		dl = s.Dispatcher.Deliver(ctx, e, p)
+	if res.Message == nil && in.Force && !res.Event.Silenced {
+		c, _ := s.Clients.Get(ctx, p.ClientID)
+		res.Message = &delivery.Message{Event: res.Event, Project: p, ClientName: c.Name, Kind: routing.KindEvent}
+		res.Event.Route = "pushed: test push (forced)"
+		_ = s.Events.SetRoute(ctx, res.Event.ID, res.Event.Route)
 	}
-	if dl == nil {
-		dl = []delivery.Delivery{}
+	dl := []delivery.Delivery{}
+	if res.Message != nil {
+		if got := s.Dispatcher.Deliver(ctx, *res.Message); got != nil {
+			dl = got
+		}
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"event": e, "deliveries": dl, "apns_configured": s.APNS != nil})
+	writeJSON(w, http.StatusCreated, map[string]any{"event": res.Event, "deliveries": dl, "apns_configured": s.APNS != nil, "route": res.Event.Route})
 }

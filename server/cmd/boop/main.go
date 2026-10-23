@@ -14,9 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chrisgreg/boop/server/internal/alerts"
 	"github.com/chrisgreg/boop/server/internal/api"
 	"github.com/chrisgreg/boop/server/internal/apns"
 	"github.com/chrisgreg/boop/server/internal/auth"
+	"github.com/chrisgreg/boop/server/internal/clients"
 	"github.com/chrisgreg/boop/server/internal/config"
 	"github.com/chrisgreg/boop/server/internal/database"
 	"github.com/chrisgreg/boop/server/internal/delivery"
@@ -92,7 +94,7 @@ func run() error {
 	evStore := events.New(db)
 	srv := &api.Server{
 		Config: cfg, DB: db, Log: log, Settings: st,
-		Projects: projects.New(db), Devices: devStore, Pairing: pairing.New(db, devStore), Events: evStore, Silences: silences.New(db),
+		Clients: clients.New(db), Projects: projects.New(db), Alerts: alerts.New(db), Devices: devStore, Pairing: pairing.New(db, devStore), Events: evStore, Silences: silences.New(db),
 		Dispatcher: dispatcher, APNS: client, APNSError: apnsErr, Admin: admin, StartedAt: time.Now(), Web: web.Handler(),
 	}
 

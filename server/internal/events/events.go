@@ -88,6 +88,9 @@ type Input struct {
 	OccurredAt  string          `json:"occurred_at"`
 	Data        json.RawMessage `json:"data"`
 	Actions     []Action        `json:"actions"`
+	// Resolve marks a recovery: it resolves the open alert with the same
+	// fingerprint in the project (and is stored as a success event by default).
+	Resolve bool `json:"resolve"`
 }
 
 // Event is a stored event.
@@ -98,6 +101,8 @@ type Event struct {
 	ProjectName string          `json:"project_name"`
 	ProjectSlug string          `json:"project_slug"`
 	ProjectIcon string          `json:"project_icon"`
+	ClientID    string          `json:"client_id"`
+	ClientName  string          `json:"client_name"`
 	Source      string          `json:"source"`
 	Type        string          `json:"type"`
 	Level       string          `json:"level"`
@@ -111,6 +116,11 @@ type Event struct {
 	// SilenceID is set when a silence rule stopped this event from being pushed.
 	SilenceID string `json:"silence_id,omitempty"`
 	Silenced  bool   `json:"silenced"`
+	// AlertID is the alert group this event belongs to ("" for info/success
+	// events that neither opened nor resolved an alert).
+	AlertID string `json:"alert_id,omitempty"`
+	// Route says why the event did or did not push.
+	Route string `json:"route,omitempty"`
 	// Group is set in grouped listings for events that carry a fingerprint: this
 	// event is the latest of Count occurrences sharing (project, fingerprint).
 	Group *GroupInfo `json:"group,omitempty"`
@@ -126,6 +136,8 @@ type GroupInfo struct {
 // Filter narrows List.
 type Filter struct {
 	ProjectID   string
+	ClientID    string // client id or slug
+	AlertID     string
 	Level       string
 	Source      string
 	Fingerprint string
@@ -170,6 +182,9 @@ func Validate(in Input, r *redact.Redactor) (Input, []byte, error) {
 	}
 	if in.Level == "" {
 		in.Level = levels.Info
+		if in.Resolve {
+			in.Level = levels.Success
+		}
 	}
 	in.Level = strings.ToLower(in.Level)
 	if !levels.Valid(in.Level) {
@@ -254,14 +269,14 @@ func (s *Store) Create(ctx context.Context, projectID string, in Input, r *redac
 	return s.Get(ctx, e.ID)
 }
 
-const selectCols = `e.id, COALESCE(e.external_id, ''), e.project_id, p.name, p.slug, p.icon, e.source, e.type, e.level, e.title, e.body, e.fingerprint, e.payload_json, e.actions_json, e.occurred_at, e.created_at, COALESCE(e.silence_id, '')`
+const selectCols = `e.id, COALESCE(e.external_id, ''), e.project_id, p.name, p.slug, p.icon, COALESCE(p.client_id, ''), COALESCE(c.name, ''), e.source, e.type, e.level, e.title, e.body, e.fingerprint, e.payload_json, e.actions_json, e.occurred_at, e.created_at, COALESCE(e.silence_id, ''), COALESCE(e.group_id, ''), e.route`
 
-const fromClause = ` FROM events e JOIN projects p ON p.id = e.project_id`
+const fromClause = ` FROM events e JOIN projects p ON p.id = e.project_id LEFT JOIN clients c ON c.id = p.client_id`
 
 func scan(row interface{ Scan(...any) error }, extra ...any) (Event, error) {
 	var e Event
 	var data, actions string
-	dest := []any{&e.ID, &e.ExternalID, &e.ProjectID, &e.ProjectName, &e.ProjectSlug, &e.ProjectIcon, &e.Source, &e.Type, &e.Level, &e.Title, &e.Body, &e.Fingerprint, &data, &actions, &e.OccurredAt, &e.CreatedAt, &e.SilenceID}
+	dest := []any{&e.ID, &e.ExternalID, &e.ProjectID, &e.ProjectName, &e.ProjectSlug, &e.ProjectIcon, &e.ClientID, &e.ClientName, &e.Source, &e.Type, &e.Level, &e.Title, &e.Body, &e.Fingerprint, &data, &actions, &e.OccurredAt, &e.CreatedAt, &e.SilenceID, &e.AlertID, &e.Route}
 	dest = append(dest, extra...)
 	err := row.Scan(dest...)
 	e.Data = json.RawMessage(data)
@@ -294,6 +309,14 @@ func filterClause(f Filter, alias string) (where []string, args []any) {
 			where = append(where, "("+a+"project_id = ? OR "+a+"project_id IN (SELECT id FROM projects WHERE slug = ?))")
 			args = append(args, f.ProjectID, f.ProjectID)
 		}
+	}
+	if f.ClientID != "" {
+		where = append(where, a+"project_id IN (SELECT pp.id FROM projects pp JOIN clients cc ON cc.id = pp.client_id WHERE cc.id = ? OR cc.slug = ?)")
+		args = append(args, f.ClientID, f.ClientID)
+	}
+	if f.AlertID != "" {
+		where = append(where, a+"group_id = ?")
+		args = append(args, f.AlertID)
 	}
 	if f.Level != "" {
 		where = append(where, a+"level = ?")
@@ -433,6 +456,12 @@ func (s *Store) List(ctx context.Context, f Filter) (Page, error) {
 // SetSilence records which rule silenced an event.
 func (s *Store) SetSilence(ctx context.Context, eventID, silenceID string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE events SET silence_id = ? WHERE id = ?`, silenceID, eventID)
+	return err
+}
+
+// SetRoute records why an event did or did not push.
+func (s *Store) SetRoute(ctx context.Context, eventID, route string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE events SET route = ? WHERE id = ?`, route, eventID)
 	return err
 }
 

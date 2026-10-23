@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, LEVELS, type Project, type ProjectCreated } from '../lib/api'
+  import { api, type Client, type Level, type Project, type ProjectCreated } from '../lib/api'
   import { LEVEL_LABEL } from '../lib/levels'
   import { relative } from '../lib/format'
   import Card from '../lib/ui/Card.svelte'
@@ -13,21 +13,29 @@
   import Empty from '../lib/ui/Empty.svelte'
   import ProjectIcon from '../lib/ui/ProjectIcon.svelte'
   import IconPicker from '../lib/ui/IconPicker.svelte'
-  import { panel, soft, pop, reorder } from '../lib/motion'
+  import LevelPicker from '../lib/ui/LevelPicker.svelte'
+  import { panel, soft, pop } from '../lib/motion'
   import Skeleton from '../lib/ui/Skeleton.svelte'
 
+  let clients = $state<Client[]>([])
   let projects = $state<Project[]>([])
   let loaded = $state(false)
   let error = $state('')
-  let newName = $state('')
+  let newClient = $state('')
+  let newProject = $state('')
+  let newProjectClient = $state('')
   let creating = $state(false)
   let revealed = $state<ProjectCreated | null>(null)
-  let editing = $state<string | null>(null)
+  let editingClient = $state<string | null>(null)
+  let editingProject = $state<string | null>(null)
   let confirmDelete = $state<string | null>(null)
 
   async function load() {
     try {
-      projects = (await api.projects()).projects
+      const [c, p] = await Promise.all([api.clients(), api.projects()])
+      clients = c.clients
+      projects = p.projects
+      if (!newProjectClient || !clients.some((x) => x.id === newProjectClient)) newProjectClient = clients[0]?.id ?? ''
     } catch (e: any) {
       error = e.message
     } finally {
@@ -38,49 +46,72 @@
     load()
   })
 
-  async function create() {
-    if (!newName.trim()) return
-    creating = true
+  async function run(fn: () => Promise<unknown>) {
     error = ''
     try {
-      revealed = await api.createProject({ name: newName.trim() })
-      newName = ''
-      await load()
+      await fn()
     } catch (e: any) {
       error = e.message
-    } finally {
-      creating = false
     }
   }
 
-  async function patch(p: Project, patch: Partial<Project>) {
-    try {
+  async function createClient() {
+    if (!newClient.trim()) return
+    creating = true
+    await run(async () => {
+      const c = await api.createClient({ name: newClient.trim() })
+      newClient = ''
+      newProjectClient = c.id
+      await load()
+    })
+    creating = false
+  }
+
+  async function createProject() {
+    if (!newProject.trim()) return
+    creating = true
+    await run(async () => {
+      revealed = await api.createProject({ name: newProject.trim(), client_id: newProjectClient || undefined })
+      newProject = ''
+      await load()
+    })
+    creating = false
+  }
+
+  const patchClient = (c: Client, patch: Partial<Client>) =>
+    run(async () => {
+      await api.updateClient(c.id, patch)
+      await load() // inheriting projects change too
+    })
+
+  const patchProject = (p: Project, patch: Partial<Project>) =>
+    run(async () => {
       const updated = await api.updateProject(p.id, patch)
       projects = projects.map((x) => (x.id === p.id ? updated : x))
-    } catch (e: any) {
-      error = e.message
-    }
-  }
+      if (patch.client_id) await load()
+    })
 
-  async function rotate(p: Project) {
-    try {
-      revealed = await api.rotateKey(p.id)
-    } catch (e: any) {
-      error = e.message
-    }
-  }
+  const removeClient = (c: Client) =>
+    run(async () => {
+      await api.deleteClient(c.id)
+      confirmDelete = null
+      await load()
+    })
 
-  async function remove(p: Project) {
-    try {
+  const removeProject = (p: Project) =>
+    run(async () => {
       await api.deleteProject(p.id)
       confirmDelete = null
       await load()
-    } catch (e: any) {
-      error = e.message
-    }
+    })
+
+  const rotate = (p: Project) => run(async () => (revealed = await api.rotateKey(p.id)))
+
+  function levelsText(set: Level[]): string {
+    return set.length ? set.map((l) => LEVEL_LABEL[l].toLowerCase()).join(', ') : 'nothing'
   }
 
-  const levelOptions = LEVELS.map((l) => ({ value: l, label: LEVEL_LABEL[l] }))
+  const clientOptions = $derived(clients.map((c) => ({ value: c.id, label: c.name })))
   const origin = typeof location !== 'undefined' ? location.origin : 'https://boop.example.com'
 </script>
 
@@ -89,84 +120,147 @@
 
   {#if revealed}
     <div transition:panel>
-    <Card title="API key for {revealed.name}">
-      <p class="secondary lead">Copy this key now. It is shown once and only a hash is stored.</p>
-      <CodeBlock code={revealed.api_key} />
-      <p class="muted lead" style="margin-top: 16px">Send your first boop:</p>
-      <CodeBlock
-        code={`curl ${origin}/api/v1/events \\\n  -H "Authorization: Bearer ${revealed.api_key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"title": "Hello from ${revealed.name}", "level": "success"}'`}
-      />
-      <div class="actions"><Button variant="secondary" onclick={() => (revealed = null)}>Done</Button></div>
-    </Card>
+      <Card title="API key for {revealed.name}">
+        <p class="secondary lead">Copy this key now. It is shown once and only a hash is stored.</p>
+        <CodeBlock code={revealed.api_key} />
+        <p class="muted lead" style="margin-top: 16px">Send a test alert:</p>
+        <CodeBlock
+          code={`curl ${origin}/api/v1/events \\\n  -H "Authorization: Bearer ${revealed.api_key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"title": "Hello from ${revealed.name}", "level": "error", "fingerprint": "hello"}'`}
+        />
+        <div class="actions"><Button variant="secondary" onclick={() => (revealed = null)}>Done</Button></div>
+      </Card>
     </div>
   {/if}
 
-  <Card title="New project">
-    <form
-      class="new"
-      onsubmit={(e) => {
-        e.preventDefault()
-        create()
-      }}
-    >
-      <Input bind:value={newName} placeholder="Project name" aria-label="Project name" maxlength={80} required />
-      <Button type="submit" disabled={creating || !newName.trim()}>Create</Button>
-    </form>
-    <p class="muted caption" style="margin-top: 8px">Each project gets its own API key and a shape icon you can change in its settings.</p>
-  </Card>
+  <div class="two">
+    <Card title="New client">
+      <form
+        class="new"
+        onsubmit={(e) => {
+          e.preventDefault()
+          createClient()
+        }}
+      >
+        <Input bind:value={newClient} placeholder="Client name" aria-label="Client name" maxlength={80} required />
+        <Button type="submit" disabled={creating || !newClient.trim()}>Add</Button>
+      </form>
+      <p class="muted caption hint">A client groups its projects, names them on your phone and gets its own monthly summary.</p>
+    </Card>
+    <Card title="New project">
+      <form
+        class="new"
+        onsubmit={(e) => {
+          e.preventDefault()
+          createProject()
+        }}
+      >
+        <Input bind:value={newProject} placeholder="Project name" aria-label="Project name" maxlength={80} required />
+        <Select bind:value={newProjectClient} options={clientOptions} aria-label="Client" />
+        <Button type="submit" disabled={creating || !newProject.trim() || !newProjectClient}>Create</Button>
+      </form>
+      <p class="muted caption hint">Each project gets its own API key and intake addresses.</p>
+    </Card>
+  </div>
 
   {#if !loaded}
-    {#each [0, 1] as i (i)}
-      <Card>
-        <Skeleton lines={2} height={13} widths={['35%', '55%']} />
-      </Card>
-    {/each}
-  {:else if projects.length === 0}
-    <Card><Empty title="No projects yet">Create one above to get an API key.</Empty></Card>
+    <Card><Skeleton lines={3} height={13} widths={['30%', '60%', '45%']} /></Card>
+  {:else if clients.length === 0}
+    <Card><Empty title="No clients yet">Add one above, then create its projects.</Empty></Card>
   {/if}
 
-  {#each projects as p (p.id)}
-    <div animate:reorder in:soft>
-    <Card compact>
-      <div class="phead">
-        <ProjectIcon icon={p.icon} size={20} />
-        <div class="ptext">
-          <div class="pname"><span class="n">{p.name}</span><span class="mono muted caption">{p.slug}</span></div>
-          <div class="pmeta muted caption">{p.notify ? `notify ≥ ${LEVEL_LABEL[p.min_level].toLowerCase()}` : 'notifications off'} · created {relative(p.created_at)}</div>
+  {#each clients as c (c.id)}
+    {@const own = projects.filter((p) => p.client_id === c.id)}
+    <div in:soft>
+      <Card>
+        <div class="chead">
+          <div class="ctext">
+            <div class="cname"><span class="n">{c.name}</span><span class="mono muted caption">{c.slug}</span></div>
+            <div class="muted caption">Pushes {levelsText(c.push_levels)}{c.push_recoveries ? ' · recoveries push' : ''} · {c.project_count} project{c.project_count === 1 ? '' : 's'}</div>
+          </div>
+          <Button variant="ghost" size="sm" onclick={() => (editingClient = editingClient === c.id ? null : c.id)}>{editingClient === c.id ? 'Close' : 'Routing'}</Button>
         </div>
-        <Button variant="ghost" size="sm" onclick={() => (editing = editing === p.id ? null : p.id)}>{editing === p.id ? 'Close' : 'Settings'}</Button>
-      </div>
 
-      {#if editing === p.id}
-        <div class="edit" transition:panel>
-          <SettingRow label="Name">
-            <Input value={p.name} onchange={(e) => patch(p, { name: (e.currentTarget as HTMLInputElement).value })} style="width: 200px" />
-          </SettingRow>
-          <SettingRow label="Icon" hint="An abstract shape from the palette, shown next to the project name in the inbox and on your phone.">
-            <IconPicker value={p.icon} onchange={(v) => patch(p, { icon: v })} />
-          </SettingRow>
-          <SettingRow label="Push notifications" hint="Turn off to store events without notifying your phone.">
-            <Switch checked={p.notify} onchange={(v) => patch(p, { notify: v })} label="Push notifications" />
-          </SettingRow>
-          <SettingRow label="Minimum level" hint="Only events at or above this level trigger a push.">
-            <Select value={p.min_level} options={levelOptions} onchange={(e) => patch(p, { min_level: (e.currentTarget as HTMLSelectElement).value as Project['min_level'] })} style="width: 150px" />
-          </SettingRow>
-          <SettingRow label="API key" hint="Rotating immediately invalidates the current key.">
-            <Button variant="secondary" size="sm" onclick={() => rotate(p)}>Rotate key</Button>
-          </SettingRow>
-          <SettingRow label="Delete project" hint="Removes the project and every event it received.">
-            {#if confirmDelete === p.id}
-              <div class="row" in:pop>
-                <Button variant="secondary" size="sm" onclick={() => (confirmDelete = null)}>Cancel</Button>
-                <Button variant="danger" size="sm" onclick={() => remove(p)}>Confirm delete</Button>
+        {#if editingClient === c.id}
+          <div class="edit" transition:panel>
+            <SettingRow label="Name">
+              <Input value={c.name} onchange={(e) => patchClient(c, { name: (e.currentTarget as HTMLInputElement).value })} style="width: 200px" />
+            </SettingRow>
+            <SettingRow label="Levels that push" hint="Lit levels push to your phone. The rest only land in the inbox. Projects use this unless they set their own.">
+              <LevelPicker value={c.push_levels} onchange={(v) => patchClient(c, { push_levels: v })} />
+            </SettingRow>
+            <SettingRow label="Push recoveries" hint="When an alert that pushed recovers on its own, send a “Resolved” push.">
+              <Switch checked={c.push_recoveries} onchange={(v) => patchClient(c, { push_recoveries: v })} label="Push recoveries" />
+            </SettingRow>
+            <SettingRow label="Delete client" hint={c.project_count ? 'Move or delete its projects first.' : 'Removes the client.'}>
+              {#if confirmDelete === c.id}
+                <div class="row" in:pop>
+                  <Button variant="secondary" size="sm" onclick={() => (confirmDelete = null)}>Cancel</Button>
+                  <Button variant="danger" size="sm" onclick={() => removeClient(c)}>Confirm delete</Button>
+                </div>
+              {:else}
+                <Button variant="danger" size="sm" disabled={c.project_count > 0} onclick={() => (confirmDelete = c.id)}>Delete</Button>
+              {/if}
+            </SettingRow>
+          </div>
+        {/if}
+
+        <div class="plist">
+          {#if own.length === 0}
+            <p class="muted caption">No projects yet.</p>
+          {/if}
+          {#each own as p (p.id)}
+            <div class="project">
+              <div class="phead">
+                <ProjectIcon icon={p.icon} size={18} />
+                <div class="ptext">
+                  <div class="pname"><span class="pn">{p.name}</span><span class="mono muted caption">{p.slug}</span></div>
+                  <div class="pmeta muted caption">
+                    {#if !p.notify}notifications off{:else}pushes {levelsText(p.effective_push_levels)}{p.push_levels ? ' (own routing)' : ''}{/if} · created {relative(p.created_at)}
+                  </div>
+                </div>
+                <Button variant="ghost" size="sm" onclick={() => (editingProject = editingProject === p.id ? null : p.id)}>{editingProject === p.id ? 'Close' : 'Settings'}</Button>
               </div>
-            {:else}
-              <Button variant="danger" size="sm" onclick={() => (confirmDelete = p.id)}>Delete</Button>
-            {/if}
-          </SettingRow>
+              {#if editingProject === p.id}
+                <div class="edit" transition:panel>
+                  <SettingRow label="Name">
+                    <Input value={p.name} onchange={(e) => patchProject(p, { name: (e.currentTarget as HTMLInputElement).value })} style="width: 200px" />
+                  </SettingRow>
+                  <SettingRow label="Client">
+                    <Select value={p.client_id} options={clientOptions} onchange={(e) => patchProject(p, { client_id: (e.currentTarget as HTMLSelectElement).value })} style="width: 200px" />
+                  </SettingRow>
+                  <SettingRow label="Icon" hint="Shown next to the project name in the inbox.">
+                    <IconPicker value={p.icon} onchange={(v) => patchProject(p, { icon: v })} />
+                  </SettingRow>
+                  <SettingRow label="Push notifications" hint="Turn off to keep everything in the inbox.">
+                    <Switch checked={p.notify} onchange={(v) => patchProject(p, { notify: v })} label="Push notifications" />
+                  </SettingRow>
+                  <SettingRow label="Use the client's routing" hint="Turn off to choose this project's own levels.">
+                    <Switch checked={p.push_levels === null} onchange={(v) => patchProject(p, { push_levels: v ? null : [...c.push_levels] })} label="Use the client's routing" />
+                  </SettingRow>
+                  {#if p.push_levels !== null}
+                    <SettingRow label="Levels that push">
+                      <LevelPicker value={p.push_levels} onchange={(v) => patchProject(p, { push_levels: v })} />
+                    </SettingRow>
+                  {/if}
+                  <SettingRow label="API key" hint="Rotating immediately invalidates the current key.">
+                    <Button variant="secondary" size="sm" onclick={() => rotate(p)}>Rotate key</Button>
+                  </SettingRow>
+                  <SettingRow label="Delete project" hint="Removes the project, its alerts and every event it received.">
+                    {#if confirmDelete === p.id}
+                      <div class="row" in:pop>
+                        <Button variant="secondary" size="sm" onclick={() => (confirmDelete = null)}>Cancel</Button>
+                        <Button variant="danger" size="sm" onclick={() => removeProject(p)}>Confirm delete</Button>
+                      </div>
+                    {:else}
+                      <Button variant="danger" size="sm" onclick={() => (confirmDelete = p.id)}>Delete</Button>
+                    {/if}
+                  </SettingRow>
+                </div>
+              {/if}
+            </div>
+          {/each}
         </div>
-      {/if}
-    </Card>
+      </Card>
     </div>
   {/each}
 </div>
@@ -174,15 +268,20 @@
 <style>
   .lead { font: var(--up-type-meta); line-height: 1.6; margin-bottom: 12px; }
   .actions { display: flex; justify-content: flex-end; margin-top: var(--up-space-4); }
-  .new { display: flex; gap: var(--up-space-3); align-items: center; }
-  .new :global(input:first-child) { flex: 1; }
-  .phead { display: flex; align-items: center; gap: 12px; }
-  .ptext { flex: 1; min-width: 0; }
-  .pname { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-  .n { font: var(--up-type-row-title); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: var(--up-space-4); }
+  .new { display: flex; gap: var(--up-space-3); align-items: center; flex-wrap: wrap; }
+  .new :global(input:first-child) { flex: 1; min-width: 140px; }
+  .hint { margin-top: 8px; }
+  .chead, .phead { display: flex; align-items: center; gap: 12px; }
+  .ctext, .ptext { flex: 1; min-width: 0; }
+  .cname, .pname { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .n { font: var(--up-type-setting); }
+  .pn { font: var(--up-type-row-title); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pmeta { margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .edit { margin-top: var(--up-space-4); }
-  @media (max-width: 520px) {
-    .new { flex-wrap: wrap; }
+  .plist { margin-top: var(--up-space-4); padding-top: var(--up-space-3); border-top: 1px solid var(--up-border-hairline); display: flex; flex-direction: column; gap: var(--up-space-3); }
+  .project + .project { padding-top: var(--up-space-3); border-top: 1px solid var(--up-border-hairline); }
+  @media (max-width: 720px) {
+    .two { grid-template-columns: 1fr; }
   }
 </style>
