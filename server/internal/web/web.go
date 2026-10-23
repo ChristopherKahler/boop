@@ -37,6 +37,9 @@ func Handler() http.Handler {
 				f.Close()
 				if strings.HasPrefix(p, "/assets/") {
 					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else if p == "/sw.js" {
+					// The browser must see a new service worker as soon as it ships.
+					w.Header().Set("Cache-Control", "no-cache")
 				}
 				server.ServeHTTP(w, r)
 				return

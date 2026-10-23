@@ -176,6 +176,9 @@ export interface Status {
     bundle_id?: string
     environment: string
   }
+  webpush: { configured: boolean; public_key?: string; error?: string }
+  /** Some push channel (web push or APNs) can send. */
+  push_ready: boolean
   devices: number
   pushable_devices: number
   projects: number
@@ -273,6 +276,10 @@ export const api = {
     request<Project>('PATCH', `/api/v1/projects/${id}`, patch),
   deleteProject: (id: string) => request<void>('DELETE', `/api/v1/projects/${id}`),
   rotateKey: (id: string) => request<ProjectCreated>('POST', `/api/v1/projects/${id}/rotate-key`),
+
+  webpush: () => request<{ configured: boolean; public_key?: string; error?: string }>('GET', '/api/v1/webpush'),
+  subscribePush: (subscription: PushSubscriptionJSON, name: string) => request<Device>('POST', '/api/v1/webpush/subscriptions', { subscription, name }),
+  unsubscribePush: (endpoint: string) => request<void>('DELETE', '/api/v1/webpush/subscriptions', { endpoint }),
 
   devices: () => request<{ devices: Device[] }>('GET', '/api/v1/devices'),
   updateDevice: (id: string, patch: { name?: string }) => request<Device>('PATCH', `/api/v1/devices/${id}`, patch),
