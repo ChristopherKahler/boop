@@ -26,6 +26,7 @@ COPY --from=build /boop /usr/local/bin/boop
 USER boop
 VOLUME ["/data"]
 EXPOSE 8080
-ENV BOOP_PORT=8080 BOOP_DATABASE_PATH=/data/boop.db
-HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8080/health || exit 1
+# The port is BOOP_PORT, else the PORT a host injects (Railway), else 8080.
+ENV BOOP_DATABASE_PATH=/data/boop.db
+HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- "http://127.0.0.1:${BOOP_PORT:-${PORT:-8080}}/health" || exit 1
 ENTRYPOINT ["boop"]

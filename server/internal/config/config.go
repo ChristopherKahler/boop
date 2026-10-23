@@ -119,12 +119,15 @@ func Load() (Config, error) {
 			Subject:    strings.TrimSpace(env("BOOP_VAPID_SUBJECT", "")),
 		},
 	}
-	if v := os.Getenv("BOOP_PORT"); v != "" {
-		p, err := strconv.Atoi(v)
-		if err != nil || p <= 0 || p > 65535 {
-			return c, fmt.Errorf("BOOP_PORT must be a port number, got %q", v)
+	// BOOP_PORT wins; otherwise PORT, which hosts such as Railway inject.
+	for _, name := range []string{"PORT", "BOOP_PORT"} {
+		if v := os.Getenv(name); v != "" {
+			p, err := strconv.Atoi(v)
+			if err != nil || p <= 0 || p > 65535 {
+				return c, fmt.Errorf("%s must be a port number, got %q", name, v)
+			}
+			c.Port = p
 		}
-		c.Port = p
 	}
 	if v := os.Getenv("BOOP_RETENTION_DAYS"); v != "" {
 		d, err := strconv.Atoi(v)
