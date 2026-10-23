@@ -4,7 +4,7 @@
   <h1 align="center">Boop</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/github/actions/workflow/status/chrisgreg/boop/ci.yml?branch=main" alt="CI" />
+  <img src="https://img.shields.io/github/actions/workflow/status/ChristopherKahler/boop/ci.yml?branch=main" alt="CI" />
   <img src="https://img.shields.io/github/go-mod/go-version/chrisgreg/boop?filename=server%2Fgo.mod" alt="Go version" />
   <img src="https://img.shields.io/github/license/chrisgreg/boop" alt="License" />
 </p>
@@ -21,6 +21,33 @@ curl https://boop.example.com/api/v1/events \
   -H "Content-Type: application/json" \
   -d '{"title": "Backup complete", "level": "success"}'
 ```
+
+## This fork: an alert hub for the clients you look after
+
+This repository is a fork of [chrisgreg/boop](https://github.com/chrisgreg/boop). It turns Boop into one place where the monitoring services already watching your clients' apps send their alerts, and from where they reach your phone. The hub does not detect problems itself: Sentry, Healthchecks, Uptime Kuma, GitHub Actions and the like do that and post to it.
+
+What it adds:
+
+- **An installable phone app with Web Push** (Android and iPhone, no app store, no Mac): the web UI installs to the home screen, and alerts arrive as notifications with an **Acknowledge** button. Push is sent from the server with the Go standard library; VAPID keys come from env or are generated on first start. The native iOS app and APNs still work as before.
+- **Clients above projects.** Every project belongs to a client; the inbox, alerts and notifications name the client.
+- **Alerts**: repeats of the same problem are one alert with a count, which you acknowledge, resolve or reopen; a recovery from the service resolves it.
+- **Webhook intakes** at `/hooks/<service>/<token>` for Sentry, Healthchecks, Uptime Kuma, GitHub Actions, Laravel Nightwatch, and any other service through a JSON field mapping with a preview. Signatures are checked where the service signs.
+- **Routing** per client (which levels push, whether recoveries push), with a per-project override.
+- **A monthly summary per client**: alerts by level, what broke, time to acknowledge and to resolve, recoveries. A page and a Markdown download.
+- **A login from the first start**: with no login configured, the hub prints a one-time setup code and stays locked until someone uses it. Sign-ins are stored, so they survive restarts, and repeated wrong passwords lock an address out.
+- **Runs anywhere from env vars**: on a Windows PC in the background (`deploy/windows/install.ps1`), with Docker compose, or on Railway.
+
+Guides:
+
+- [docs/install-guide.md](docs/install-guide.md): run your own hub, first visit, phone app, and connecting each monitoring service.
+- [docs/railway.md](docs/railway.md): Railway in detail. The short version:
+  1. New service from this repo; **Settings → Root Directory** `/server`; custom config file `/server/railway.json`.
+  2. A volume mounted at `/data`, and the variable `RAILWAY_RUN_UID=0` (volumes mount as root; the image runs as uid 1000).
+  3. Generate a domain; set `BOOP_BASE_URL` and `BOOP_INTAKE_URL` to it, and `BOOP_TIMEZONE`.
+  4. Deploy. Railway injects `PORT` and health-checks `/health`. Keep one replica.
+  5. Open the domain and enter the `setup_code` from the deploy logs (or set `BOOP_ADMIN_USER`/`BOOP_ADMIN_PASSWORD`).
+
+Built on Boop by Chris Gregori, under the MIT licence in [LICENSE](LICENSE), which this fork keeps as it is. Everything below is Boop's own documentation, updated where the fork changes it.
 
 ## Architecture
 
@@ -43,20 +70,20 @@ Your apps POST events with a project API key. The Go server redacts and stores t
 ## Quick start (Docker)
 
 ```bash
-git clone https://github.com/chrisgreg/boop && cd boop
-cp .env.example .env          # optional: BOOP_BASE_URL and APNS_* values
+git clone https://github.com/ChristopherKahler/boop && cd boop
+cp .env.example .env          # optional: BOOP_BASE_URL, a login, APNS_* values
 mkdir -p data && chown 1000:1000 data   # Linux hosts only; the container runs as uid 1000
 docker compose up -d --build
 open http://localhost:8080
 ```
 
-The first visit opens a setup wizard: server check, APNs, pairing, first project, test notification. APNs credentials are optional; without them events are stored and shown in the UI but pushes are skipped, and the settings page says so.
+Without a login in `.env`, the first visit asks for the one-time setup code the server prints in its log (`docker compose logs boop | grep setup_code`), then you choose a username and password. A setup wizard follows: your first client, connecting a service, putting the app on your phone, and a test push. Push to the phone app needs the hub on an https address; APNs credentials are optional and only used by the native iOS app.
 
 Data lives in `./data/boop.db`. Back up by copying that file (use `sqlite3 data/boop.db ".backup backup.db"` for a consistent copy while running). Back up your `.p8` key separately.
 
 ## Quick start (binary)
 
-Every [release](https://github.com/chrisgreg/boop/releases) ships a static, dependency-free binary for Linux, macOS and Windows (amd64 and arm64) with the web UI embedded. Download the archive for your platform, verify it against `checksums.txt` if you like, and run:
+Upstream's releases do not include this fork's features; until this fork publishes its own, build the binary with `make build`. Every [release](https://github.com/chrisgreg/boop/releases) ships a static, dependency-free binary for Linux, macOS and Windows (amd64 and arm64) with the web UI embedded. Download the archive for your platform, verify it against `checksums.txt` if you like, and run:
 
 ```bash
 tar xzf boop_*_linux_amd64.tar.gz && cd boop_*_linux_amd64
@@ -226,9 +253,9 @@ All endpoints are under `/api/v1` (except the Sentry envelope endpoint). Errors 
 | GET | `/health` | none | `{"status":"ok"}` |
 | POST | `/api/v1/events` | project key | Create event, returns `{id, created_at}` |
 | POST | `/api/:id/envelope/` | Sentry DSN key | [Sentry SDK](#sentry-sdks--drop-in-dsn) ingest; DSN public key is a project API key |
-| GET | `/api/v1/events?project=&level=&source=&fingerprint=&since=&until=&silenced=&grouped=&before=&limit=` | device or none | List, newest first; `next_cursor` feeds `before`; `silenced=true\|false` filters; `grouped=true` collapses repeated fingerprints into one row with `group: {count, first_seen, last_seen}` |
-| GET | `/api/v1/events/:id` | device or none | Full event |
-| GET | `/api/v1/events/:id/deliveries` | device or none | Push attempts for an event |
+| GET | `/api/v1/events?project=&level=&source=&fingerprint=&since=&until=&silenced=&grouped=&before=&limit=` | device or admin | List, newest first; `next_cursor` feeds `before`; `silenced=true\|false` filters; `grouped=true` collapses repeated fingerprints into one row with `group: {count, first_seen, last_seen}` |
+| GET | `/api/v1/events/:id` | device or admin | Full event |
+| GET | `/api/v1/events/:id/deliveries` | device or admin | Push attempts for an event |
 | GET/POST | `/api/v1/projects` | admin | List / create (returns `api_key` once) |
 | GET/PATCH/DELETE | `/api/v1/projects/:id` | admin | Manage |
 | POST | `/api/v1/projects/:id/rotate-key` | admin | New key, old one stops working |
@@ -246,12 +273,31 @@ All endpoints are under `/api/v1` (except the Sentry envelope endpoint). Errors 
 | POST | `/api/v1/events/:id/unsilence` | admin | Clear the flag and push the event now |
 | POST | `/api/v1/test` | admin | Create a test event and push it |
 | POST | `/mcp` | MCP token, device, or admin | Read-only [MCP](#mcp-for-ai-agents) endpoint (Streamable HTTP); `404 mcp_disabled` when switched off in Settings |
+| GET | `/api/v1/auth/me` | none | Whether a login is needed, set up, or signed in |
+| POST | `/api/v1/auth/login`, `/api/v1/auth/logout` | none / session | Sign in (sets the session cookie) / out |
+| POST | `/api/v1/auth/setup` | setup code | First login: `{code, username, password}` |
+| GET | `/api/v1/alerts?client=&project=&status=&level=&before=&limit=` | device or admin | Alerts (one per problem) with counts and state |
+| GET | `/api/v1/alerts/:id` | device or admin | One alert with its occurrences |
+| POST | `/api/v1/alerts/:id/acknowledge`, `/resolve`, `/reopen` | device or admin | Change an alert's state |
+| GET/POST | `/api/v1/clients` | admin | List / create clients |
+| GET/PATCH/DELETE | `/api/v1/clients/:id` | admin | Manage, including routing (`push_levels`, `push_recoveries`) |
+| GET | `/api/v1/clients/:id/summary?month=YYYY-MM&tz=` | admin | Monthly summary (default: this month, `BOOP_TIMEZONE`); `/summary.md` is the Markdown download |
+| GET/POST | `/hooks/:kind/:token` | intake token | Webhook intake: `sentry`, `healthchecks`, `uptime-kuma`, `github`, `nightwatch`, `generic` |
+| GET | `/api/v1/intakes` | admin | Intakes, with what each last received |
+| POST | `/api/v1/projects/:id/intakes` | admin | Create an intake; returns its address once |
+| PATCH/DELETE | `/api/v1/intakes/:id` | admin | Name, signing secret, mapping / remove |
+| POST | `/api/v1/intakes/:id/rotate` | admin | New address; the old one stops working |
+| POST | `/api/v1/intakes/preview` | admin | What a sample payload would become under a mapping |
+| GET | `/api/v1/webpush` | admin | The VAPID public key for subscribing |
+| POST/DELETE | `/api/v1/webpush/subscriptions` | admin | Turn notifications on / off for this browser |
+| POST | `/api/v1/push/action` | signed link | Acknowledge pressed on a notification |
+| GET | `/manifest.webmanifest` | none | The installable app's manifest (`BOOP_APP_NAME`) |
 
 Event fields on `POST /api/v1/events`: `title` (required), `body`, `level`, `source`, `type`, `external_id`, `fingerprint`, `occurred_at`, `data`, `actions` — see [`integration-llms.md`](integration-llms.md) for limits.
 
 Credentials: project keys (`boop_proj_...`) can only create events; device credentials (`boop_dev_...`) can only read events and manage their own device. Only SHA-256 hashes are stored.
 
-**Admin auth.** Set `BOOP_ADMIN_USER` and `BOOP_ADMIN_PASSWORD` and the web UI shows a sign-in screen; admin endpoints then need the session cookie it sets (`POST /api/v1/auth/login`) or HTTP Basic credentials (`curl -u user:pass …`). Sessions last 30 days and live in memory, so a restart signs everyone out. Leave both unset and everything is open — only do that behind your own proxy, Tailscale, or VPN. Either way, project and device credentials are refused on admin endpoints, so a leaked client secret never grants admin rights.
+**Admin auth.** The hub always has a login unless you turn it off. It comes from `BOOP_ADMIN_USER` and `BOOP_ADMIN_PASSWORD` when both are set; otherwise from the one created in the browser on first visit, where the server prints a one-time setup code in its log (`auth.setup_required`, field `setup_code`) and stays locked until someone enters it (`POST /api/v1/auth/setup`). Admin endpoints need the session cookie the sign-in sets (`POST /api/v1/auth/login`) or HTTP Basic credentials (`curl -u user:pass …`). Sessions are stored in the database, last 30 days from the last visit, and survive restarts. Five failed sign-ins from one address within 15 minutes block it for 15 minutes. `BOOP_ALLOW_NO_LOGIN=true` runs with no login at all; only do that behind your own proxy, Tailscale, or VPN. Either way, project and device credentials are refused on admin endpoints, so a leaked client secret never grants admin rights.
 
 ## MCP (for AI agents)
 
@@ -271,13 +317,20 @@ Any client that supports Streamable HTTP with a custom header can connect the sa
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `BOOP_PORT` | `8080` | |
-| `BOOP_BASE_URL` | request origin | Public URL your phone can reach; used in the pairing QR |
+| `BOOP_PORT` | `8080` | Wins over `PORT` |
+| `PORT` | | Used when `BOOP_PORT` is unset; hosts such as Railway inject it |
+| `BOOP_BASE_URL` | request origin | Public URL your phone can reach; used in the pairing QR, links in pushes, and the push contact |
+| `BOOP_INTAKE_URL` | `BOOP_BASE_URL` | Internet-reachable address shown for webhook intakes (`/hooks/...`), when it differs from the UI's |
+| `BOOP_TIMEZONE` | `UTC` | IANA name (`America/Chicago`) for months and times in monthly summaries |
+| `BOOP_APP_NAME` | `Boop` | Name of the installed phone app |
 | `BOOP_DATABASE_PATH` | `/data/boop.db` | WAL mode, migrations applied on start |
 | `BOOP_RETENTION_DAYS` | `90` | Days of history to keep; `0` = forever. When set it overrides the value saved in the web UI on every start; leave unset to manage it from Settings |
 | `BOOP_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `BOOP_ADMIN_USER` | | Web UI / admin API username; set together with the password |
-| `BOOP_ADMIN_PASSWORD` | | 8+ characters. Unset = no login |
+| `BOOP_ADMIN_PASSWORD` | | 8+ characters. Unset = the login created in the browser with the setup code |
+| `BOOP_ALLOW_NO_LOGIN` | | `true` = no login at all, when none exists. Only behind your own proxy or VPN |
+| `BOOP_VAPID_PUBLIC_KEY`, `BOOP_VAPID_PRIVATE_KEY` | generated | Web Push keys; set both or neither. Unset = generated on first start and kept in the database. `boop vapid` prints a pair |
+| `BOOP_VAPID_SUBJECT` | `BOOP_BASE_URL` | Contact push services see: `mailto:` address or `https://` URL |
 | `BOOP_MCP_TOKEN` | | Bearer token for the read-only [MCP endpoint](#mcp-for-ai-agents); 16+ characters |
 | `APNS_TEAM_ID` | | Apple Developer team id |
 | `APNS_KEY_ID` | | Id of the APNs auth key |
@@ -308,6 +361,14 @@ Use `docker-compose.dokploy.yml`, not `docker-compose.yml`. It swaps the `./data
 4. Add a domain with HTTPS in Dokploy pointing at port `8080`; deploy. Settings in the web UI should show **APNs · Configured**.
 
 Editing the compose file in Dokploy's UI only works for **Raw** compose apps; when the source is Git, commit changes and redeploy.
+
+## Deploying on Railway
+
+See [docs/railway.md](docs/railway.md): one service from `server/` with `server/railway.json`, one volume at `/data`, `RAILWAY_RUN_UID=0`, and `BOOP_BASE_URL`/`BOOP_INTAKE_URL` set to the generated domain.
+
+## Running on a Windows PC
+
+`deploy/windows/install.ps1` installs the hub to `%LOCALAPPDATA%\boop`, starts it at sign-in with no window (a scheduled task with a 5-minute watchdog), writes `boop.env` with a generated login, and with `-TailscalePort <port>` serves it over https on your tailnet for the phone. Re-run it to update. Steps in [docs/install-guide.md](docs/install-guide.md#windows-pc).
 
 ## Pairing
 
