@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,39 @@ import (
 
 	"github.com/chrisgreg/boop/server/internal/ratelimit"
 )
+
+// /hooks is published to the internet on its own, so nothing under it may
+// fall through to the web UI.
+func TestHookPathsNeverServeTheUI(t *testing.T) {
+	e := newEnv(t)
+	withUI := *e.server
+	withUI.Web = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<!doctype html><title>Boop</title>"))
+	})
+	srv := httptest.NewServer(withUI.Handler())
+	t.Cleanup(srv.Close)
+	for _, method := range []string{"GET", "POST", "PUT"} {
+		for _, path := range []string{"/hooks", "/hooks/", "/hooks/sentry", "/hooks/a/b/c", "/hooks/uptime-kuma/boop_hook_nope"} {
+			req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader("{}"))
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := io.ReadAll(res.Body)
+			res.Body.Close()
+			if res.StatusCode != 404 || !strings.Contains(string(raw), `"no such intake"`) {
+				t.Errorf("%s %s: %d %s; want the wrong-address 404", method, path, res.StatusCode, raw)
+			}
+		}
+	}
+	if res, _ := http.Get(srv.URL + "/"); res != nil {
+		raw, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if !strings.Contains(string(raw), "<!doctype html>") {
+			t.Errorf("the web UI itself is not served at /: %s", raw)
+		}
+	}
+}
 
 func TestHookRateLimits(t *testing.T) {
 	e := newEnv(t)

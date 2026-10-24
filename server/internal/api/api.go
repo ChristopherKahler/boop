@@ -124,6 +124,13 @@ func (s *Server) Handler() http.Handler {
 	// part of the hub that has to be reachable from the internet.
 	mux.HandleFunc("POST /hooks/{kind}/{token}", s.hook)
 	mux.HandleFunc("GET /hooks/{kind}/{token}", s.hook)
+	// /hooks is the one path published to the internet, so anything else
+	// under it gets the wrong-address answer, never the web UI.
+	hookNotFound := func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotFound, "not_found", "no such intake")
+	}
+	mux.HandleFunc("/hooks", hookNotFound)
+	mux.HandleFunc("/hooks/", hookNotFound)
 	mux.Handle("GET /api/v1/intakes", s.adminAuth(s.listIntakes))
 	mux.Handle("POST /api/v1/projects/{id}/intakes", s.adminAuth(s.createIntake))
 	mux.Handle("PATCH /api/v1/intakes/{id}", s.adminAuth(s.updateIntake))
