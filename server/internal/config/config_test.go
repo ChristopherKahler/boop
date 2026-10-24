@@ -25,6 +25,25 @@ func TestPortPrecedence(t *testing.T) {
 	}
 }
 
+func TestHookLimits(t *testing.T) {
+	t.Setenv("BOOP_HOOK_LIMIT", "")
+	t.Setenv("BOOP_HOOK_SENDER_LIMIT", "")
+	if c, err := Load(); err != nil || c.HookLimit != 120 || c.HookSenderLimit != 600 {
+		t.Errorf("defaults: %d %d %v", c.HookLimit, c.HookSenderLimit, err)
+	}
+	t.Setenv("BOOP_HOOK_LIMIT", "30")
+	t.Setenv("BOOP_HOOK_SENDER_LIMIT", "0")
+	if c, err := Load(); err != nil || c.HookLimit != 30 || c.HookSenderLimit != 0 {
+		t.Errorf("set: %d %d %v", c.HookLimit, c.HookSenderLimit, err)
+	}
+	for _, bad := range []string{"-1", "lots"} {
+		t.Setenv("BOOP_HOOK_LIMIT", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("BOOP_HOOK_LIMIT=%q should be refused", bad)
+		}
+	}
+}
+
 func TestTimezoneAndVAPIDValidation(t *testing.T) {
 	t.Setenv("BOOP_TIMEZONE", "America/Chicago")
 	if c, err := Load(); err != nil || c.Timezone != "America/Chicago" {

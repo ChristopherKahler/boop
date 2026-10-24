@@ -75,6 +75,13 @@ A push names the client and the alert, with **Acknowledge** and the alert's link
 
 Each project gets one webhook address per service: the project's settings → **Intakes** → **Add intake**, pick the service. The address is shown once (only a hash is kept); **New address** replaces it.
 
+How the webhook addresses are protected, since they are the only part of the hub that has to be reachable from the internet:
+
+- Each address ends in a long random secret. A wrong address gets the same "not found" answer whatever it is, so addresses cannot be guessed or probed.
+- Sentry, GitHub, Laravel Nightwatch and the JSON mapping can also sign every message. Paste the service's secret into the intake and the hub refuses any message whose signature does not match.
+- Each address accepts up to 120 requests a minute, and each sender up to 600 a minute across all addresses, wrong ones included. Over that, the sender is told to wait (HTTP 429), and the intake shows "rate limited". Change the numbers with `BOOP_HOOK_LIMIT` and `BOOP_HOOK_SENDER_LIMIT`.
+- If an address leaks, press **New address**: the old one stops working at once.
+
 | Service | Where to paste the address | Opens an alert on | Resolves it on |
 | --- | --- | --- | --- |
 | **Sentry** | Settings → Developer Settings → Create New Integration → **Internal Integration**. Webhook URL: the address. Turn on **Alert Rule Action**; under Webhooks tick **issue**. Copy its **Client Secret** into the intake's signing secret. Add the integration as an action in your alert rules. | new or unresolved issue, metric alert (critical or warning) | issue resolved, metric alert resolved |
